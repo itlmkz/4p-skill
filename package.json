@@ -1,0 +1,35 @@
+{
+  "name": "4p-skill",
+  "version": "0.1.0",
+  "description": "A four-pane advisory panel for coding agents: AMO (the critical eye), tester, reviewer, and big picture, as live agents in your terminal.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "herdr",
+    "advisory-panel",
+    "devils-advocate",
+    "code-review",
+    "agents"
+  ],
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "files": [
+    "extensions",
+    "skills",
+    "panel",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types tests/extension.test.mjs"
+  }
+}

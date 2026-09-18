@@ -1,0 +1,39 @@
+{
+  "task": "Add a session-refresh helper so an expired token re-signs in without a full reload.",
+  "diff": "--- a/apps/rewire/src/lib/auth/gates.tsx\n+++ b/apps/rewire/src/lib/auth/gates.tsx\n@@ -38,6 +38,14 @@ export function RequireAuth({ children }: { children: ReactNode }) {\n   const { user, loading } = useCurrentUser();\n   if (loading) return <Spinner />;\n   if (!user) return <SignInGate />;\n+\n+  const refreshed = useRef(false);\n+  useEffect(() => {\n+    if (refreshed.current) return;\n+    refreshed.current = true;\n+    refreshSession().catch(() => {\n+      window.location.href = \"/sign-in\";\n+    });\n+  }, []);\n   return <>{children}</>;\n }\n",
+  "panel": {
+    "reviewer": [
+      {
+        "claim": "The effect never re-runs, so a token that expires mid-session is never refreshed.",
+        "evidence": "apps/rewire/src/lib/auth/gates.tsx:41, the useRef guard",
+        "severity": "blocking"
+      },
+      {
+        "claim": "refreshSession() is called without awaiting or checking the result.",
+        "evidence": "apps/rewire/src/lib/auth/gates.tsx:44",
+        "severity": "should-fix"
+      }
+    ],
+    "contraire": [
+      {
+        "claim": "Setting window.location.href discards in-flight UI state, which is worse than the 401 it is handling.",
+        "evidence": "apps/rewire/src/lib/auth/gates.tsx:45",
+        "severity": "blocking"
+      }
+    ],
+    "tester": [
+      {
+        "claim": "Could not verify: no test covers an expired token in this component.",
+        "evidence": "rg 'refreshSession' apps/rewire/src, one match, no test file",
+        "severity": "should-fix"
+      }
+    ],
+    "bigpicture": [
+      {
+        "claim": "This duplicates the session-refresh logic that already lives in popup.server.ts.",
+        "evidence": "apps/rewire/src/lib/auth/popup.server.ts:1",
+        "severity": "should-fix"
+      }
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# The launcher is stdlib-only; this should stay empty in practice.
+node_modules/
