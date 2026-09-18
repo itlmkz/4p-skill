@@ -66,10 +66,12 @@ recognised. Never ship an enforcement rule without a test in the script it will
 actually be used with.
 
 `experiments/lang/` measured whether answering in another language saves tokens.
-It does not: brevity is the saving. Terse English is the winner, so the panel and
-the coordinator both use terse English. Chinese costs more at equal brevity, and
-classical Chinese compresses characters rather than tokens. ASD-STE100 is an
-English standard, which is a second reason the answer is English.
+It does not: brevity is the saving. English is the language. Chinese costs more at
+equal brevity, and classical Chinese compresses characters rather than tokens.
+ASD-STE100 is an English standard, which is a second reason the answer is English.
+
+The style is STE100, not ultra terse. Ultra terse was measured at 16% cheaper and
+rejected: it drops articles and words, and ambiguity costs more than 16%.
 
 Decided, not left open. Move on.
 

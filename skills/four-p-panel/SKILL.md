@@ -106,23 +106,25 @@ Useful fields when you merge:
 
 ### Language and style, decided
 
-Write terse English, everywhere. Panes and coordinator alike. Measured:
+English, in STE100. Panes and coordinator alike. Measured, same three findings:
 
-| Style | Tokens for the same three findings |
+| Style | Tokens |
 | --- | ---: |
 | verbose English prose | 173 |
 | English ultra terse | 72 |
 | English STE100 | 86 |
 | modern Chinese | 102 |
-| classical Chinese, wenyan-full | 24 chars for 24 tokens, 1.85x worse than ultra |
-| JSON contract | 183, and still the right choice |
+| classical Chinese (wenyan) | loses to English by 1.4x to 2.0x |
 
-Brevity is the saving. Language is not. Chinese and Japanese both cost more than
-English at equal brevity, and classical Chinese compresses characters rather than
-tokens. English terse wins, so English it is.
+Brevity is the saving. Language is not. So English it is.
 
-Terseness must not become ambiguity. Keep these guards:
+The style is STE100, not ultra terse. Ultra terse saves 16% and drops articles
+and words to do it. A missing word that flips a meaning costs more than 16%, so
+the words stay. Terseness is not worth ambiguity.
 
+That is also STE100 rule 4.2, so these guards are not extra rules:
+
+- Do not omit words.
 - Never drop `not`, `never`, `no`, `only`, `except`.
 - Keep numbers, units, paths, and error strings exact.
 - One word for one meaning. No synonym rotation.

@@ -137,7 +137,8 @@ Korean sentences are measured in characters instead, with a 45-character budget,
 because those scripts have no spaces. It also rejects unknown fields, so a pane
 cannot smuggle in an unagreed shape.
 
-Style is decided and measured. Terse English, everywhere. Same three findings:
+Style is decided and measured. English, in STE100, everywhere. Same three
+findings:
 
 | Style | Tokens |
 | --- | ---: |
@@ -145,11 +146,11 @@ Style is decided and measured. Terse English, everywhere. Same three findings:
 | English ultra terse | 72 |
 | English STE100 | 86 |
 | modern Chinese | 102 |
-| classical Chinese (wenyan) | loses to terse English, 1.4x to 2.0x |
+| classical Chinese (wenyan) | loses to English by 1.4x to 2.0x |
 
-Brevity is the saving, language is not, so English it is. Terseness keeps guards
-against ambiguity: never drop `not`, `never`, `no`, `only`, `except`, and keep
-numbers, units, paths, and error strings exact.
+Brevity is the saving, language is not, so English it is. STE100 is the style and
+not ultra terse: ultra saves 16% by dropping articles and words, and a missing
+word that flips a meaning costs more than that.
 
 See [experiments/lang/README.md](experiments/lang/README.md) for the method and
 the caveman comparison.

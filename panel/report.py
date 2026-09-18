@@ -272,10 +272,9 @@ def describe(schema: dict) -> str:
     out = "\n".join(lines)
     out += (
         "\n\nfree text marked STE100: one sentence, 20 words maximum, active voice,\n"
-        "no em dash, one word for one meaning. Write terse English: drop filler,\n"
-        "hedging, and articles where the meaning stays clear, and state each fact\n"
-        "once. Sentences in Chinese, Japanese, or Korean are measured in characters,\n"
-        "with a 45-character budget, because those scripts have no spaces. The\n"
+        "no em dash, one word for one meaning. Do not omit words. Sentences in\n"
+        "Chinese, Japanese, or Korean are measured in characters, with a\n"
+        "45-character budget, because those scripts have no spaces. The\n"
         "validator enforces sentence length and the em dash. Word choice is your\n"
         "responsibility."
     )

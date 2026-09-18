@@ -129,6 +129,13 @@ The part worth borrowing is the **proxy**, not the skill. It compresses what the
 agent *reads*: test output, logs, diffs, search results. Nothing in 4p addresses
 that, and it is where a pane's token bill actually goes.
 
+## Decision
+
+STE100 English, everywhere. Ultra terse was measured at 16% cheaper (72 tokens
+against 86 for the same findings) and rejected. It saves that 16% by dropping
+articles and words, and a missing word that flips a meaning costs more than 16%.
+Terseness is not worth ambiguity.
+
 ## Consequence for the main pane
 
 ASD-STE100 is an English standard. It does not apply to French or Chinese. If the

@@ -87,8 +87,8 @@ BRIEF_TAIL = Template("""\
 4. Carry evidence for each finding: kind=file with file and line, or kind=command with command and observed.
 5. When you cannot verify something, use verdict=could_not_verify and fill could_not_verify. Never guess.
 6. Never merge, push, commit, revert, stash, or delete. Never run a destructive command.
-7. Write terse English. Free text is Simplified Technical English: one sentence, 20 words maximum, active voice, no em dash. Drop filler, hedging, and articles where the meaning stays clear. State each fact once. Chinese, Japanese, and Korean get a 45-character budget instead. The validator enforces the length and the em dash.
-8. Never drop not, never, no, only, or except. Keep numbers, units, paths, and error strings exact. Ambiguity costs more than the tokens it saves.
+7. Free text is Simplified Technical English: one sentence, 20 words maximum, active voice, no em dash. Chinese, Japanese, and Korean get a 45-character budget instead. The validator enforces the length and the em dash.
+8. Do not omit words. Never drop not, never, no, only, or except. Keep numbers, units, paths, and error strings exact.
 9. Do not manufacture objections. Report an empty findings list when the work is sound.
 """)
 
