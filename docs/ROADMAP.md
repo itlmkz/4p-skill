@@ -59,6 +59,17 @@ Two STE100 rules are enforced mechanically, because they are checkable: a
 sentence over 20 words, and an em dash. Word choice and active voice stay a
 request to the pane. Do not pretend the validator checks those.
 
+A language without spaces silently defeated the word rule. A 63-character
+Chinese sentence counted as one word and passed. Free text in Chinese, Japanese,
+or Korean now gets a 45-character budget per sentence, and CJK sentence marks are
+recognised. Never ship an enforcement rule without a test in the script it will
+actually be used with.
+
+`experiments/lang/` measured whether answering in another language saves tokens.
+It does not: brevity is the saving. STE100 English halves the count; Chinese of
+the same brevity costs 17% more than English. ASD-STE100 is also an English
+standard, so it does not apply to another language at all.
+
 This was also the prerequisite for anything in `experiments/jev/`, which can now
 read a real shape instead of guessing at prose.
 

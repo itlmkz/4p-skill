@@ -107,8 +107,14 @@ Useful fields when you merge:
 ### STE100 is enforced
 
 Free text fields are Simplified Technical English. The validator mechanically
-rejects two rules: a sentence over 20 words (5.1) and an em dash. Word choice and
-active voice are not mechanically checkable, so they stay a request to the pane.
+rejects two rules: a sentence over 20 words (5.1) and an em dash. Sentences in
+Chinese, Japanese, or Korean are measured in characters instead, with a
+45-character budget, because those scripts have no spaces. Word choice and active
+voice are not mechanically checkable, so they stay a request to the pane.
+
+ASD-STE100 is an English standard. It does not apply to other languages, so if
+you answer the user in another language, drop the STE100 claim rather than
+pretending it holds.
 
 ### What the user reads
 

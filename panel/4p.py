@@ -87,7 +87,7 @@ BRIEF_TAIL = Template("""\
 4. Carry evidence for each finding: kind=file with file and line, or kind=command with command and observed.
 5. When you cannot verify something, use verdict=could_not_verify and fill could_not_verify. Never guess.
 6. Never merge, push, commit, revert, stash, or delete. Never run a destructive command.
-7. Free text is Simplified Technical English: one sentence, 20 words maximum, active voice, no em dash. The validator enforces the length and the em dash.
+7. Free text is Simplified Technical English: one sentence, 20 words maximum, active voice, no em dash. Chinese, Japanese, and Korean get a 45-character budget instead. The validator enforces the length and the em dash.
 8. Do not manufacture objections. Report an empty findings list when the work is sound.
 """)
 

@@ -132,8 +132,13 @@ herdr agent read <name> --source recent-unwrapped --lines 200 \
 ```
 
 Free text is Simplified Technical English. The validator enforces the parts that
-are mechanical: a sentence over 20 words, and an em dash. It also rejects unknown
-fields, so a pane cannot smuggle in an unagreed shape.
+are mechanical: a sentence over 20 words, and an em dash. Chinese, Japanese, and
+Korean sentences are measured in characters instead, with a 45-character budget,
+because those scripts have no spaces. It also rejects unknown fields, so a pane
+cannot smuggle in an unagreed shape.
+
+Measured with `experiments/lang`: brevity halves the token count, changing the
+language does not. See [experiments/lang/README.md](experiments/lang/README.md).
 
 | Variable | Effect |
 | --- | --- |

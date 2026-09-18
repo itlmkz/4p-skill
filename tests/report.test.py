@@ -175,6 +175,41 @@ check(
     True,
 )
 
+# --- scripts without spaces get a character budget, not a word count --------
+# Before this rule, a 63-character Chinese sentence counted as one "word" and
+# passed the STE100 check. A validator that claims enforcement it does not
+# perform is worse than no validator, so these cases are pinned.
+
+ZH_63 = "这是一个非常长的中文句子用来测试验证器是否能够正确地识别过长的句子因为它没有空格所以按照英文的单词计数方式它只会被算作一个单词"
+check("CJK long sentence is caught, not silently passed", mentions(errors_of({**MINIMAL, "next_action": ZH_63}), "CJK budget is 45"), True)
+check("CJK 45 characters accepted", errors_of({**MINIMAL, "next_action": "语" * 45}), [])
+check("CJK 46 characters rejected", mentions(errors_of({**MINIMAL, "next_action": "语" * 46}), "CJK budget is 45"), True)
+check(
+    "CJK sentence marks are recognised",
+    errors_of({**MINIMAL, "next_action": "会话中过期的令牌不会刷新。这是阻断问题。"}),
+    [],
+)
+check(
+    "CJK em dash still rejected",
+    mentions(errors_of({**MINIMAL, "next_action": "测试\u2014句子"}), "em dash"),
+    True,
+)
+check(
+    "Japanese long sentence is caught",
+    mentions(errors_of({**MINIMAL, "next_action": "ガードは以降の更新をすべて止めますセッション中に期限切れのトークンは更新されませんブロックです"}), "CJK budget"),
+    True,
+)
+check(
+    "space-delimited text still uses the word rule, not the CJK rule",
+    mentions(errors_of({**MINIMAL, "next_action": " ".join(["mot"] * 25) + "."}), "STE100 allows 20"),
+    True,
+)
+check(
+    "CJK applies inside findings too",
+    mentions(errors_of({**MINIMAL, "findings": [{**MINIMAL["findings"][0], "claim": ZH_63}]}), "CJK budget is 45"),
+    True,
+)
+
 
 # --- extraction from raw pane output ----------------------------------------
 

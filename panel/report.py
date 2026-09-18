@@ -28,9 +28,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCHEMA_PATH = os.path.join(HERE, "report.schema.json")
 
 # Simplified Technical English, rule 5.1. Enforced, not merely requested.
-STE100_MAX_WORDS_PER_SENTENCE = 20
+# A language without spaces needs a character budget instead of a word budget.
+# Measured: ~45 CJK characters carry the same content as one 20-word sentence.
+STE100_MAX_WORDS = 20
+STE100_MAX_CJK_CHARS = 45
 EM_DASH = "\u2014"
-SENTENCE_SPLIT = re.compile(r"[.!?]+")
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+SENTENCE_SPLIT = re.compile(r"[.!?;]+|[\u3002\uff01\uff1f\uff1b]+")
 
 TYPE_MAP = {
     "object": dict,
@@ -143,16 +147,33 @@ def check_ste100(text: str, where: str, errors: list[str]) -> None:
 
     Rule 5.1 (20 words per sentence) and the house rule against em dashes are
     mechanical. Word choice and voice are not, so they stay a request.
+
+    Chinese, Japanese, and Korean have no spaces, so a word count is meaningless
+    there and the rule would silently pass anything. Those scripts get a
+    character budget instead, and their own sentence marks are recognised.
     """
     if EM_DASH in text:
         errors.append(f"{where}: contains an em dash. Use a comma or a full stop.")
+
+    dense = bool(CJK.search(text))
     for sentence in SENTENCE_SPLIT.split(text):
-        words = sentence.split()
-        if len(words) > STE100_MAX_WORDS_PER_SENTENCE:
-            errors.append(
-                f"{where}: sentence has {len(words)} words, STE100 allows "
-                f"{STE100_MAX_WORDS_PER_SENTENCE}. Split it."
-            )
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if dense:
+            length = len(re.sub(r"\s+", "", sentence))
+            if length > STE100_MAX_CJK_CHARS:
+                errors.append(
+                    f"{where}: sentence has {length} characters, the CJK budget is "
+                    f"{STE100_MAX_CJK_CHARS}. Split it."
+                )
+        else:
+            words = sentence.split()
+            if len(words) > STE100_MAX_WORDS:
+                errors.append(
+                    f"{where}: sentence has {len(words)} words, STE100 allows "
+                    f"{STE100_MAX_WORDS}. Split it."
+                )
 
 
 def validate_report(report, schema: dict) -> list[str]:
@@ -251,8 +272,10 @@ def describe(schema: dict) -> str:
     out = "\n".join(lines)
     out += (
         "\n\nfree text marked STE100: one sentence, 20 words maximum, active voice,\n"
-        "no em dash, one word for one meaning. The validator enforces sentence length\n"
-        "and the em dash. Word choice is your responsibility."
+        "no em dash, one word for one meaning. Sentences in Chinese, Japanese, or\n"
+        "Korean are measured in characters, with a 45-character budget, because\n"
+        "those scripts have no spaces. The validator enforces sentence length and\n"
+        "the em dash. Word choice is your responsibility."
     )
     return out
 
