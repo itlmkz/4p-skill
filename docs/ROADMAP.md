@@ -106,3 +106,21 @@ An honest assessment, recorded so it is not rediscovered later:
 Verdict: keep it as an experiment. The one place it protects the AMO seat rather
 than replacing it is checking that a manufactured objection is actually supported
 by the material. That is worth exploring later, not now.
+
+## Overlap with pi-jev, which is already installed
+
+`npm:pi-jev` v0.3.0 is installed on this machine. It exposes `jev_evaluate` with
+the Choice, Noul, and Score primitives, plus semantic tool and skill routing.
+That covers most of `experiments/jev/jev.py`, which is a hand-rolled client over
+OpenRouter's decisions endpoint. Do not build a third client.
+
+|  | `npm:pi-jev` | `experiments/jev` |
+| --- | --- | --- |
+| API | TypeSafe direct, needs `TYPESAFE_API_KEY` | OpenRouter decisions endpoint, needs only an OpenRouter key |
+| Invocation | an agent tool call, so the model composes | a deterministic CLI, so code owns the thresholds |
+| Scope | tool routing, skill discovery, compaction | panel seat routing, per-finding evidence check |
+
+The per-finding evidence check is the part `pi-jev` does not have. It is
+panel-specific. Everything else is duplicated, so treat the client here as
+disposable. When the agent should decide, prefer `jev_evaluate`. When code should
+decide, the CLI in this experiment is the right shape.
