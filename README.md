@@ -20,7 +20,13 @@ is held to a rule: block on real risk, never on taste.
 ## Requirements
 
 - [pi](https://pi.dev) running inside a [Herdr](https://github.com/) pane.
-- `python3` on your PATH. The launcher is stdlib-only.
+- `python3` on your PATH. The launcher is stdlib-only. No dependencies.
+
+Tests need node for the extension suite:
+
+```bash
+npm test
+```
 
 ## Install
 
@@ -61,6 +67,74 @@ That is a contract, not a sandbox: panes keep `bash` because they need it to run
 tests. For the enforced version, set `4PP_STRICT_NO_WRITE=1` and they get
 `read,grep,find,ls` only, at the cost of not being able to run anything.
 
+## The contract
+
+The panes speak json in both directions. The brief in, and one `4p/report@1`
+block out. Neither side is prose, so the merge step never parses a wall of text.
+
+```json
+{
+  "schema": "4p/report@1",
+  "role": "contraire",
+  "verdict": "block",
+  "confidence": 0.72,
+  "findings": [
+    {
+      "id": "amo-1",
+      "severity": "blocking",
+      "claim": "The redirect discards in-flight form state on each token expiry.",
+      "evidence": { "kind": "file", "file": "src/auth/gates.tsx", "line": 45 },
+      "confirm_test": "Expire the token with text in the form and check the input.",
+      "blocks": true
+    }
+  ],
+  "assumptions": [
+    {
+      "statement": "A refresh failure always means the session is unrecoverable.",
+      "if_false": "The user is signed out while a valid session still exists.",
+      "verified": false
+    }
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "Should a failed refresh retry once before signing the user out?",
+      "recommendation": "Retry once, then sign out.",
+      "blocks": true
+    }
+  ],
+  "could_not_verify": [
+    { "what": "The expiry path in a real browser.", "blocker": "No browser runtime in this pane." }
+  ],
+  "next_action": "Decide the retry policy first."
+}
+```
+
+The shape is the point:
+
+- `evidence.kind=file` requires `file` and `line`. A citation without a line is
+  not checkable, so the validator rejects it.
+- `assumptions[]` carries every assumption the verdict rests on, each with
+  `if_false`. An unstated assumption is the most expensive kind.
+- `questions[]` carries decisions that belong to the owner, each with a
+  `recommendation`. A pane never presents a decision bare. This is the grill
+  mechanic: surface the frontier, recommend an answer, let the owner decide.
+- `blocks` is true only for real risk: data loss, security, a broken deploy, an
+  irreversible choice, a silent behavior change. Never taste.
+
+Validate and extract with the same tool the panes use:
+
+```bash
+python3 panel/report.py --contract                # derived from the schema
+python3 panel/report.py --validate report.json
+herdr agent read <name> --source recent-unwrapped --lines 200 \
+  | python3 panel/report.py --extract -
+```
+
+Free text is Simplified Technical English. The validator enforces the parts that
+are mechanical: a sentence over 20 words, and an em dash. It also rejects unknown
+fields, so a pane cannot smuggle in an unagreed shape.
+
 | Variable | Effect |
 | --- | --- |
 | `4PP_MODEL`, `4PP_THINKING` | Model and thinking level for the panes |
@@ -82,6 +156,9 @@ configuration is not built yet. See `docs/ROADMAP.md`.
 extensions/four-p.ts        registers /4p
 skills/four-p-panel/        the contract: seats, driving, reporting rules
 panel/4p.py                 the launcher (stdlib only)
+panel/report.schema.json    the report contract, single source of truth
+panel/report.py             validate, extract, and describe the contract
+tests/                      extension, contract, and brief tests
 experiments/jev/            a separate experiment, not part of the tool
 ```
 

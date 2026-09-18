@@ -43,85 +43,126 @@ REPORT_DIR = "/tmp/4pp"
 START_TIMEOUT_MS = 90000
 PROMPT_TIMEOUT_MS = 240000
 
-COMMON_BRIEF = Template("""\
-You are the $ROLE_NAME pane ($ROLE_LABEL) of a four-pane advisory panel in Herdr, spawned by the /4pp command.
+BRIEF_VERSION = "4p/brief@1"
 
-Session facts
-- Working dir: $CWD (the repo the parent is working on; read AGENTS.md for house rules)
-- Herdr tab: $TAB_ID | your pane: $PANE_ID | parent agent pane: $CALLER_PANE
-- Peer panes: $PEERS
-- Reporting: $REPORT_RULE
-- Tool posture: $TOOL_POSTURE
+# The panes speak a versioned contract in both directions: this brief in, and one
+# 4p/report@1 json block out. The contract text is derived from the schema at
+# runtime, so a brief can never describe a shape the validator will reject.
+BRIEF_HEAD = Template("""\
+$BRIEF_VERSION  role=$ROLE_KEY  seat=$ROLE_LABEL  name=$ROLE_NAME
 
-Operating protocol
-- Stand by now. Do not start work, do not edit files, do not run long commands, do not commit.
-- Write rule: the coordinator pane ($CALLER_PANE) is the only writer of repo code. Do not change repo files or git state on your own initiative; a command the coordinator explicitly asks you to run is authorized. Propose patches; the coordinator applies them.
-- You are an advisor: report findings to the coordinator. Never fix the code yourself, even if you are sure and the fix is one line.
-- When you get a task: investigate with real evidence (read files, run commands, run tests), then answer.
-- Answer shape: verdict first, then 3-7 bullets. Every claim carries a file:line, a command, or observed output. No speculation dressed as fact.
-- Separate blocking findings from nits. Say plainly when something is fine; do not manufacture objections.
-- Never merge, push, commit, revert, or delete. Never run destructive commands.
-- House rules: never use an em dash. Write in Simplified Technical English: sentences of 20 words maximum, active voice, one idea for each sentence. User-facing prose follows the humanizer skill. Evidence over opinion.
+[SESSION]
+cwd=$CWD
+tab=$TAB_ID
+pane=$PANE_ID
+coordinator_pane=$CALLER_PANE
+peers=$PEERS
+posture=$TOOL_POSTURE
+
+[OUTPUT]
+Your whole answer is one fenced json block.
+Write no prose before it. Write no prose after it.
+The block must satisfy the contract below.
+The coordinator reads it with report.py --extract, so any text outside the block is lost.
+$REPORT_RULE
+
+[CONTRACT]
+$CONTRACT
+
+[SELF-CHECK]
+Before you answer, validate the exact json that you intend to emit.
+Put that json in the heredoc. The command must print "valid".
+  python3 $VALIDATOR --validate - <<'JSON'
+  <your json>
+  JSON
+Fix each problem it reports. Then answer.
 """)
+
+BRIEF_TAIL = Template("""\
+
+[RULES]
+1. Stand by until you get a task.
+2. The coordinator pane is the only writer. Never change repo files or git state on your own initiative.
+3. You are an advisor. Never fix the code, even when the fix is one line.
+4. Carry evidence for each finding: kind=file with file and line, or kind=command with command and observed.
+5. When you cannot verify something, use verdict=could_not_verify and fill could_not_verify. Never guess.
+6. Never merge, push, commit, revert, stash, or delete. Never run a destructive command.
+7. Free text is Simplified Technical English: one sentence, 20 words maximum, active voice, no em dash. The validator enforces the length and the em dash.
+8. Do not manufacture objections. Report an empty findings list when the work is sound.
+""")
+
+
+def load_contract() -> tuple[str, str]:
+    """Return (contract text, absolute path to the validator).
+
+    Derived from report.schema.json, which is the single source of truth.
+    If it cannot be read, the brief says so instead of guessing a shape.
+    """
+    panel_dir = os.path.dirname(os.path.abspath(__file__))
+    validator = os.path.join(panel_dir, "report.py")
+    try:
+        if panel_dir not in sys.path:
+            sys.path.insert(0, panel_dir)
+        from report import describe, load_schema
+
+        return describe(load_schema()), validator
+    except Exception as exc:  # pragma: no cover - misinstalled package
+        return (
+            f"contract unavailable ({exc}). Emit a 4p/report@1 json block and validate it with {validator}.",
+            validator,
+        )
 
 ROLE_BRIEFS = {
     "contraire": Template("""\
-Your role: assistant contraire. "Il assure une fonction de regard critique et de contradiction constructive sur les decisions de chantier."
-You are the critical eye on build decisions. Push back on the decision, not the person.
+Your role: AMO. Regard critique et contradiction constructive on build decisions.
+Push back on the decision. Never push back on the person.
 
-For each decision you are handed, deliver:
-- The load-bearing assumption, stated in one sentence, and what happens if it is false.
-- The failure mode nobody has mentioned yet, and how it would show up in production.
-- The cheapest test that would disconfirm the plan, and what result would flip your verdict.
-- The steelman of the opposite choice: what the rejected path buys that this one does not.
-- What would change your mind.
+Do this:
+- State the load-bearing assumption in assumptions[], with its if_false.
+- Name the failure mode that nobody has mentioned, and how it would appear in production.
+- Give the cheapest test that would disprove the plan, in confirm_test.
+- Steelman the rejected path in a finding: what it buys that this one does not.
+- Put each decision that belongs to the owner in questions[], with a recommendation. Never leave a decision bare.
 
-Be adversarial but constructive: never block on taste or style, always block on real risk (data loss, security, broken deploy, irreversible choices, silent behavior change). If the decision is sound, say so in one line and stop. Do not rubber-stamp, and do not pad.
+Block only on real risk: data loss, security, a broken deploy, an irreversible choice, a silent behavior change. Never block on taste. When the decision is sound, set verdict=ship, leave findings[] empty, and stop.
 """),
     "tester": Template("""\
 Your role: tester. You verify empirically. Nothing is true because it reads well.
 
-Rules:
-- Actually run the thing: build, typecheck, unit tests, scripts, curl the deployed URL, re-run the failing case. Report the exact command and the observed output.
-- Never claim something works or fails without running it. If you cannot run it (missing secrets, no network, no runtime), say "could not verify" and name the blocker precisely.
-- Try to break it: empty input, huge input, wrong types, missing env, concurrent use, re-run after failure, the state the feature was not designed for.
-- State the verdict as verified / not verified / broken, then the evidence, then residual risk.
-- Prefer the smallest reproduction that isolates the failure.
-- Do not fix code unless the parent asks. Finding and proving the bug is your job.
+Do this:
+- Run the thing: the build, the typecheck, the tests, the scripts, the deployed url. Put the exact command in evidence.command and what you saw in evidence.observed.
+- Map the outcome to verdict: verified gives ship, broken gives block, not run gives could_not_verify.
+- Try to break it: empty input, huge input, wrong types, missing env, a re-run after failure, concurrent use.
+- Put each thing that you could not run in could_not_verify, with the precise blocker. Name the missing secret, network, runtime, or file.
+- Keep the smallest reproduction that isolates the failure.
+
+Never claim a result that you did not observe. Never fix the code. Proving the bug is your job.
 """),
     "reviewer": Template("""\
-Your role: reviewer. You review the change itself, against this repo's own standards.
+Your role: reviewer. You review the change against this repo's own standards.
 
-Cover, in priority order:
-1. Correctness and behavior change: does it do what was asked, and does it silently change anything else?
-2. Edge cases, error handling, failure paths, and what the user sees when it goes wrong.
+Cover in this order. Cite file and line for each finding:
+1. Correctness and behavior change. Does it do what was asked, and does it silently change something else?
+2. Edge cases, error handling, failure paths, and what the user sees when it breaks.
 3. Security: secrets, injection, authz, data exposure, trust boundaries.
-4. Repo conventions: AGENTS.md rules, file layout, naming, i18n, design-system import fences, DS-edit approval rules.
+4. Repo conventions: AGENTS.md, file layout, naming, design-system rules.
 5. Tests: what is covered, what is asserted weakly, what is missing.
 6. Readability and dead code.
 
-Rules:
-- Read the real diff (git diff / git show), never trust a summary of it.
-- Cite file:line. Rank findings blocking > should-fix > nit, and label each one.
-- Do not restate the diff. Only report what you would change and why.
-- Do not edit or commit; report.
+Read the real diff. Never trust a summary of it. Do not restate the diff. Report only what you would change and why. Rank each finding blocking, should-fix, or nit.
 """),
     "bigpicture": Template("""\
-Your role: big picture. You protect coherence between this change and the product, the platform, and the plan.
+Your role: big picture. You protect coherence between this change, the product, and the platform.
 
-Ask and answer:
-- Which product decision or wiki note does this serve? Does it contradict an existing decision (wiki/20-Decisions, PRODUCT.md, DESIGN.md, AGENTS.md)?
-- Does it drive the platform toward one shape or fork it (duplication, parallel patterns, a second source of truth)?
-- Is it a one-way door? What is the cost of undoing it in a month?
-- Is there a smaller step that gets 80% of the value now?
-- What should be cut from this plan? What is scope creep?
-- What breaks later if this ships as-is: maintenance burden, migration debt, docs drift, ops load.
-- Who is this for (staff, partner, external) and does the change respect the audience and access boundaries?
+Ask and answer. Ground each claim in a repo file:
+- Which product decision or note does this serve? Does it contradict one? Check AGENTS.md, DESIGN.md, PRODUCT.md, and any decisions directory.
+- Does it fork the platform, for example with a second source of truth or a parallel pattern?
+- Is it a one-way door? What does undoing it cost in a month?
+- Is there a smaller step that gets most of the value now?
+- What should be cut? What breaks later: maintenance, migration debt, docs drift, ops load?
+- Who is this for, and does the change respect the audience and access boundaries?
 
-Rules:
-- Ground claims in repo files (cite them). No strategy talk without a file or a measured signal.
-- Lead with the single most important coherence risk, then the rest.
-- If the change is coherent and well scoped, say so in two lines and stop. Do not invent concerns.
+Put each decision that belongs to the owner in questions[], with a recommendation. Lead with the single most important coherence risk. When the change is coherent, set verdict=ship, leave findings[] empty, and stop.
 """),
 }
 
@@ -243,8 +284,14 @@ def free_agent_name(base: str, taken: set[str]) -> str:
 
 
 def brief_for(role: str, ctx: dict) -> str:
-    text = COMMON_BRIEF.substitute(**ctx, ROLE_NAME=ROLE_NAMES[role], ROLE_LABEL=f"{LABEL_PREFIX}{role}")
-    return text + "\n" + ROLE_BRIEFS[role].substitute(**ctx)
+    head = BRIEF_HEAD.substitute(
+        **ctx,
+        ROLE_KEY=role,
+        ROLE_LABEL=f"{LABEL_PREFIX}{role}",
+        ROLE_NAME=ROLE_NAMES[role],
+    )
+    body = ROLE_BRIEFS[role].substitute(**ctx)
+    return head + "\n[ROLE]\n" + body + BRIEF_TAIL.substitute(**ctx)
 
 
 def parse_args(argv: list[str]) -> tuple[bool, bool, str]:
@@ -383,9 +430,9 @@ def main() -> int:
             "needs a change, return the exact patch (file, anchor text, replacement) and the coordinator applies it."
         )
     report_rule = (
-        f"long reports go to {tab_dir}/<role>.md, with a 3-line summary in your pane"
+        f"Also write the same json block to {tab_dir}/<role>.json."
         if allow_write
-        else "report in-pane, verdict first, tight (aim under 40 lines). You cannot hand over a file; if a report really needs to be a document, say so and the coordinator decides."
+        else "Answer in your pane only. Do not write a file. The coordinator extracts the block."
     )
     if allow_write:
         os.makedirs(tab_dir, exist_ok=True)
@@ -534,12 +581,16 @@ def main() -> int:
         panel[role] = {"pane_id": pane_id, "agent": name, "status": "started"}
 
     # 5. Send role briefs.
+    contract, validator = load_contract()
     ctx_base = {
         "CWD": os.getcwd(),
         "TAB_ID": tab_id,
         "CALLER_PANE": caller_pane,
         "TOOL_POSTURE": tool_posture,
         "REPORT_RULE": report_rule,
+        "CONTRACT": contract,
+        "VALIDATOR": validator,
+        "BRIEF_VERSION": BRIEF_VERSION,
         "PEERS": ", ".join(f"{ROLE_NAMES[r]}={panel[r]['pane_id']}" for r in ROLE_ORDER),
     }
     for role in ROLE_ORDER:

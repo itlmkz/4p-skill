@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/itlmkz/4p-skill/panel/report.schema.json",
+  "title": "4p panel report",
+  "description": "One advisor pane's answer. The pane emits exactly one fenced json block, and nothing else.",
+  "type": "object",
+  "required": ["schema", "role", "verdict", "confidence", "findings", "next_action"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "4p/report@1"
+    },
+    "role": {
+      "enum": ["contraire", "tester", "reviewer", "bigpicture"]
+    },
+    "verdict": {
+      "description": "could_not_verify means you could not run the check, not that the work failed.",
+      "enum": ["ship", "fix_first", "block", "hold", "could_not_verify"]
+    },
+    "confidence": {
+      "description": "Your own certainty in this verdict, 0 to 1. Be honest; a low value is useful.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "assumptions": {
+      "description": "Every assumption your verdict depends on. An unstated assumption is the most expensive kind.",
+      "type": "array",
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/assumption" }
+    },
+    "questions": {
+      "description": "Decisions that belong to the owner, each with your recommendation.",
+      "type": "array",
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/question" }
+    },
+    "could_not_verify": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/blocked" }
+    },
+    "next_action": {
+      "description": "One sentence the coordinator can act on immediately.",
+      "type": "string",
+      "x-ste100": true
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["id", "severity", "claim", "evidence", "blocks"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+        },
+        "severity": {
+          "enum": ["blocking", "should-fix", "nit"]
+        },
+        "claim": {
+          "description": "What is wrong or right. One sentence.",
+          "type": "string",
+          "x-ste100": true
+        },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "confirm_test": {
+          "description": "The cheapest test that would disprove this finding.",
+          "type": "string",
+          "x-ste100": true
+        },
+        "blocks": {
+          "description": "True only for real risk: data loss, security, a broken deploy, an irreversible choice, a silent behavior change. Never for taste.",
+          "type": "boolean"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "file" } } },
+          "then": { "required": ["file", "line"] }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "command" } } },
+          "then": { "required": ["command"] }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "url" } } },
+          "then": { "required": ["url"] }
+        }
+      ],
+      "properties": {
+        "kind": {
+          "enum": ["file", "command", "output", "url", "none"]
+        },
+        "file": {
+          "description": "Required when kind is file. The repo-relative path.",
+          "type": "string"
+        },
+        "line": {
+          "description": "Required when kind is file. A citation without a line is not checkable.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "command": {
+          "description": "Required when kind is command. The exact command you ran.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Required when kind is url.",
+          "type": "string"
+        },
+        "observed": {
+          "description": "What you actually saw when you ran it.",
+          "type": "string",
+          "x-ste100": true
+        }
+      }
+    },
+    "assumption": {
+      "type": "object",
+      "required": ["statement", "if_false"],
+      "additionalProperties": false,
+      "properties": {
+        "statement": {
+          "type": "string",
+          "x-ste100": true
+        },
+        "if_false": {
+          "description": "What happens to your verdict if this assumption is false.",
+          "type": "string",
+          "x-ste100": true
+        },
+        "verified": {
+          "description": "True only if you checked it yourself.",
+          "type": "boolean"
+        }
+      }
+    },
+    "question": {
+      "type": "object",
+      "required": ["id", "question", "recommendation"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+        },
+        "question": {
+          "type": "string",
+          "x-ste100": true
+        },
+        "recommendation": {
+          "description": "Your recommended answer. Required. Never leave the decision bare.",
+          "type": "string",
+          "x-ste100": true
+        },
+        "blocks": {
+          "type": "boolean"
+        }
+      }
+    },
+    "blocked": {
+      "type": "object",
+      "required": ["what", "blocker"],
+      "additionalProperties": false,
+      "properties": {
+        "what": {
+          "type": "string",
+          "x-ste100": true
+        },
+        "blocker": {
+          "description": "Name the missing secret, network, runtime, or file precisely.",
+          "type": "string",
+          "x-ste100": true
+        }
+      }
+    }
+  }
+}

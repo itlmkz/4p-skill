@@ -30,6 +30,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types tests/extension.test.mjs"
+    "test": "node --experimental-strip-types tests/extension.test.mjs && python3 tests/report.test.py && python3 tests/brief.test.py",
+    "test:extension": "node --experimental-strip-types tests/extension.test.mjs",
+    "test:contract": "python3 tests/report.test.py && python3 tests/brief.test.py"
   }
 }

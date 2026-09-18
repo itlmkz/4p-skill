@@ -56,7 +56,8 @@ tests.
 ```bash
 herdr agent prompt <name> "<task>" --wait --timeout 600000   # one pane, blocking
 herdr agent prompt <name> "<task>" --timeout 600000          # fire and continue
-herdr agent read <name> --source recent-unwrapped --lines 200
+herdr agent read <name> --source recent-unwrapped --lines 200 \
+  | python3 panel/report.py --extract -                      # the pane's report
 herdr agent list
 ```
 
@@ -70,16 +71,56 @@ or `herdr agent list`. Never assume them.
 
 ## Reporting rules
 
+The panes answer in a contract, not in prose. Both directions are structured, so
+the coordinator never parses a wall of text.
+
+**In:** the launcher briefs each pane with `4p/brief@1`. It carries the session
+facts, the role, the rules, and the output contract, which is rendered from
+`panel/report.schema.json` at runtime. The brief cannot describe a shape the
+validator will reject.
+
+**Out:** each pane answers with exactly one fenced json block, `4p/report@1`,
+and no prose around it. The pane validates its own answer before sending it.
+
+```bash
+python3 panel/report.py --contract                 # the contract, derived from the schema
+python3 panel/report.py --validate report.json    # validate one report
+herdr agent read <name> --source recent-unwrapped --lines 200 \
+  | python3 panel/report.py --extract -           # pull the block out of pane output
+```
+
+`--extract` tolerates a pane that wraps its answer in prose. It finds the first
+json object that parses, so a chatty pane is an inconvenience, not a failure.
+
+Useful fields when you merge:
+
+| Field | Why it matters |
+| --- | --- |
+| `verdict` | `ship`, `fix_first`, `block`, `hold`, or `could_not_verify` |
+| `confidence` | The pane's own certainty. Low is useful information, not noise. |
+| `findings[].blocks` | True only for real risk. This is what gates a merge. |
+| `findings[].evidence` | `kind=file` needs `file` and `line`. A citation without a line is not checkable, and the validator rejects it. |
+| `assumptions[]` | Every assumption the verdict rests on, each with `if_false`. An unstated assumption is the most expensive kind. |
+| `questions[]` | Decisions that belong to the owner, each with a `recommendation`. Never presented bare. |
+| `could_not_verify[]` | What the pane could not run, and the precise blocker. |
+
+### STE100 is enforced
+
+Free text fields are Simplified Technical English. The validator mechanically
+rejects two rules: a sentence over 20 words (5.1) and an em dash. Word choice and
+active voice are not mechanically checkable, so they stay a request to the pane.
+
+### What the user reads
+
 Panel output is input to you, not a deliverable. Anything a user or the owner
 reads follows house rules:
 
-- Simplified Technical English (ASD-STE100). Sentences of 20 words maximum.
-  Active voice. One idea per sentence. One word for one meaning.
+- Simplified Technical English. Sentences of 20 words maximum. Active voice.
 - No em dashes.
 - Verdict first, then the evidence. Every claim carries a file:line, a command,
   or observed output.
 - Separate blocking findings from nits. Say plainly when something is fine.
-- Do not quote pane text verbatim. Rewrite it in Simplified Technical English.
+- Do not quote pane json verbatim. Rewrite it in Simplified Technical English.
 
 ## Environment
 
