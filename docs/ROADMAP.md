@@ -66,9 +66,12 @@ recognised. Never ship an enforcement rule without a test in the script it will
 actually be used with.
 
 `experiments/lang/` measured whether answering in another language saves tokens.
-It does not: brevity is the saving. STE100 English halves the count; Chinese of
-the same brevity costs 17% more than English. ASD-STE100 is also an English
-standard, so it does not apply to another language at all.
+It does not: brevity is the saving. Terse English is the winner, so the panel and
+the coordinator both use terse English. Chinese costs more at equal brevity, and
+classical Chinese compresses characters rather than tokens. ASD-STE100 is an
+English standard, which is a second reason the answer is English.
+
+Decided, not left open. Move on.
 
 This was also the prerequisite for anything in `experiments/jev/`, which can now
 read a real shape instead of guessing at prose.

@@ -137,8 +137,22 @@ Korean sentences are measured in characters instead, with a 45-character budget,
 because those scripts have no spaces. It also rejects unknown fields, so a pane
 cannot smuggle in an unagreed shape.
 
-Measured with `experiments/lang`: brevity halves the token count, changing the
-language does not. See [experiments/lang/README.md](experiments/lang/README.md).
+Style is decided and measured. Terse English, everywhere. Same three findings:
+
+| Style | Tokens |
+| --- | ---: |
+| verbose English prose | 173 |
+| English ultra terse | 72 |
+| English STE100 | 86 |
+| modern Chinese | 102 |
+| classical Chinese (wenyan) | loses to terse English, 1.4x to 2.0x |
+
+Brevity is the saving, language is not, so English it is. Terseness keeps guards
+against ambiguity: never drop `not`, `never`, `no`, `only`, `except`, and keep
+numbers, units, paths, and error strings exact.
+
+See [experiments/lang/README.md](experiments/lang/README.md) for the method and
+the caveman comparison.
 
 | Variable | Effect |
 | --- | --- |

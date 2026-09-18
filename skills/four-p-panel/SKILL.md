@@ -104,17 +104,41 @@ Useful fields when you merge:
 | `questions[]` | Decisions that belong to the owner, each with a `recommendation`. Never presented bare. |
 | `could_not_verify[]` | What the pane could not run, and the precise blocker. |
 
-### STE100 is enforced
+### Language and style, decided
 
-Free text fields are Simplified Technical English. The validator mechanically
-rejects two rules: a sentence over 20 words (5.1) and an em dash. Sentences in
-Chinese, Japanese, or Korean are measured in characters instead, with a
-45-character budget, because those scripts have no spaces. Word choice and active
-voice are not mechanically checkable, so they stay a request to the pane.
+Write terse English, everywhere. Panes and coordinator alike. Measured:
 
-ASD-STE100 is an English standard. It does not apply to other languages, so if
-you answer the user in another language, drop the STE100 claim rather than
-pretending it holds.
+| Style | Tokens for the same three findings |
+| --- | ---: |
+| verbose English prose | 173 |
+| English ultra terse | 72 |
+| English STE100 | 86 |
+| modern Chinese | 102 |
+| classical Chinese, wenyan-full | 24 chars for 24 tokens, 1.85x worse than ultra |
+| JSON contract | 183, and still the right choice |
+
+Brevity is the saving. Language is not. Chinese and Japanese both cost more than
+English at equal brevity, and classical Chinese compresses characters rather than
+tokens. English terse wins, so English it is.
+
+Terseness must not become ambiguity. Keep these guards:
+
+- Never drop `not`, `never`, `no`, `only`, `except`.
+- Keep numbers, units, paths, and error strings exact.
+- One word for one meaning. No synonym rotation.
+
+### What the validator enforces
+
+Two rules are mechanical: a sentence over 20 words (STE100 5.1), and an em dash.
+Sentences in Chinese, Japanese, or Korean are measured in characters instead,
+with a 45-character budget, because those scripts have no spaces.
+
+Word choice and active voice are not mechanically checkable, so they stay a
+request to the pane. Do not claim otherwise.
+
+ASD-STE100 is an English standard, and this tool is English for that reason. If
+the owner ever wants another language for the coordinator, the STE100 claim must
+be dropped rather than quietly kept.
 
 ### What the user reads
 
