@@ -14,17 +14,17 @@ answer. Each seat here is a different kind of attention:
 
 | Seat | Label | Job |
 | --- | --- | --- |
-| **AMO** | `4pp:contraire` | Critical eye and constructive contradiction. The load-bearing assumption, the unmentioned failure mode, the cheapest disconfirming test, the steelman of the rejected path, what would flip its verdict. Blocks on real risk, never on taste. |
+| **AMO** | `4pp:contraire` | Rapid decision checkpoint. Four-level gate: yes, yes_but, no_but, no_critical. Blocks on real risk (data loss, security, broken deploy, irreversible choice, silent behavior change). Says yes fast when the decision is sound. Full report mode for initial task review only. |
 | tester | `4pp:tester` | Empirical verification only. Runs the build, the tests, the scripts, the deployed URL. Reports exact commands and observed output. Says "could not verify" and names the blocker instead of guessing. |
 | reviewer | `4pp:reviewer` | The real diff against the repo's own standards. Correctness, behavior change, edge cases, security, conventions, test coverage. Findings ranked blocking, should-fix, nit, each with file:line. |
 | big picture | `4pp:bigpicture` | Coherence with product and platform decisions. Drift, duplication, one-way doors, scope to cut, audience and access boundaries. |
 
-The **AMO** seat is the reason this tool exists. A role told to contradict will
-sometimes manufacture contradiction, so hold it to its own rule: it blocks on
-real risk (data loss, security, a broken deploy, an irreversible choice, a silent
-behavior change) and it never blocks on taste. When it is right, its objection is
-usually the cheapest one to hear before shipping and the most expensive one to
-hear after.
+The **AMO** seat is the reason this tool exists. It is a rapid checkpoint, not a
+slow reviewer. The coordinator prompts it with each decision as it comes up, and
+gets back a four-level verdict in three lines. A `no_critical` stops work and
+escalates to the user. This catches the cheap-to-hear-now, expensive-to-hear-later
+objections before they ship. Reserve the full report contract for the initial
+task review; after that, use the rapid checkpoint for every decision.
 
 ## Open the panel
 
@@ -103,6 +103,59 @@ prints one JSON object:
 A pane whose `status` is not `"ok"` either failed to produce a report or
 produced an invalid one. Report the failure to the user; do not guess what the
 pane meant.
+
+## Rapid checkpoint (AMO / contraire)
+
+The contraire is a decision checkpoint, not a slow reviewer. Use it for every
+decision and design choice as you work. This is the default interaction mode
+after the initial full-panel review.
+
+### When to checkpoint
+
+- Before committing to an architecture choice.
+- Before writing more than 20 lines of code for a new approach.
+- Before touching auth, data, payments, or anything irreversible.
+- When you are unsure whether the user would agree.
+
+### How to checkpoint
+
+Prompt the contraire with the decision, one sentence:
+
+```bash
+herdr agent prompt <contraire-name> \
+  "Decision: use SQLite for the session store instead of Redis." \
+  --wait --timeout 60000
+```
+
+Read the response directly. It is three lines, not JSON:
+
+```
+verdict: yes_but
+reason: SQLite works but has no built-in eviction, so sessions will grow forever.
+watch: Add a cron job to prune sessions older than 30 days.
+```
+
+### The four verdict levels
+
+| Verdict | Meaning | What you do |
+| --- | --- | --- |
+| `yes` | Sound, proceed. | Implement. |
+| `yes_but` | Proceed, note the watch item. | Implement; flag the watch item to the user at the end. |
+| `no_but` | Proceed only after the fix in reason. | Fix the issue, then implement. |
+| `no_critical` | Real risk. Stop and ask the user. | Present the reason and ask the user to decide. |
+
+A `no_critical` stops all work. Present the reason to the user with a
+recommendation and wait for their decision. Never override a `no_critical`.
+
+### When to use the full report instead
+
+The initial task review uses the full panel (all four panes, full `4p/report@1`
+contract). After that, individual decisions use the rapid checkpoint above.
+Reserve the full report for:
+
+- The first review of a complete task or feature.
+- When the coordinator explicitly asks "full report".
+- When the user asks for a deep review.
 
 ## Driving the panel manually
 

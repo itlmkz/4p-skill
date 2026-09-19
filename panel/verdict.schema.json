@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/itlmkz/4p-skill/panel/verdict.schema.json",
+  "title": "4p contraire verdict",
+  "description": "A rapid checkpoint response from the AMO (contraire). Three lines of text, no JSON.",
+  "type": "object",
+  "required": ["schema", "verdict", "reason"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "4p/verdict@1"
+    },
+    "verdict": {
+      "description": "Four-level gate. Each level is stricter than the last.",
+      "enum": ["yes", "yes_but", "no_but", "no_critical"]
+    },
+    "reason": {
+      "description": "One sentence. What you see and why it matters.",
+      "type": "string",
+      "x-ste100": true,
+      "maxLength": 200
+    },
+    "watch": {
+      "description": "Optional. One-line items to keep an eye on.",
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "string",
+        "x-ste100": true,
+        "maxLength": 120
+      }
+    }
+  },
+  "$defs": {}
+}
