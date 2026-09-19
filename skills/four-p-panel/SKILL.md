@@ -42,9 +42,13 @@ recreate a panel merely to reset it.
 
 ## Who writes
 
-The coordinator pane is the only writer of repo code. Panel panes start with
-`--exclude-tools edit,write` and are briefed to leave git state alone. They
-propose patches. You apply them.
+The coordinator pane is the only writer of repo code. Panel panes are briefed to
+leave git state alone, and their write tools are removed at launch. They propose
+patches. You apply them.
+
+The flag depends on the agent kind: `pi` gets `--exclude-tools edit,write`, and
+`claude` gets `--disallowedTools Write Edit NotebookEdit`. A kind with no known
+flag gets none, so its posture is the brief alone. Never describe that as enforced.
 
 This is a contract, not a kernel boundary: bash stays available because panes
 need it to run tests. For an enforced version, set `4PP_STRICT_NO_WRITE=1` and

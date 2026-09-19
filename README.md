@@ -89,9 +89,20 @@ herdr agent list
 
 ## Who writes
 
-Your pi session is the only writer of repo code. Panes start with
-`--exclude-tools edit,write` and are briefed to leave git alone. They propose
-patches. You apply them.
+Your session is the only writer of repo code. Panes are briefed to leave git
+alone, and the write tools are removed from them at launch. They propose patches.
+You apply them.
+
+The flag differs by kind, because pi and Claude Code do not share flag names:
+
+| Kind | Default posture | Strict (`4PP_STRICT_NO_WRITE=1`) |
+| --- | --- | --- |
+| `pi` | `--exclude-tools edit,write` | `--tools read,grep,find,ls` |
+| `claude` | `--disallowedTools Write Edit NotebookEdit` | `--allowedTools Read Grep Glob` |
+| other kinds | none, the brief alone | none |
+
+An unrecognized kind gets no flags. Its posture is the brief and nothing more,
+which is weaker than it looks. Check the table before you trust a new kind.
 
 That is a contract, not a sandbox: panes keep `bash` because they need it to run
 tests. For the enforced version, set `4PP_STRICT_NO_WRITE=1` and they get

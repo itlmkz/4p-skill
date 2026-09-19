@@ -1,6 +1,6 @@
 {
   "name": "4p-skill",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A four-pane advisory panel for coding agents: AMO (the critical eye), tester, reviewer, and big picture, as live agents in your terminal.",
   "keywords": [
     "pi-package",
@@ -32,7 +32,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types tests/extension.test.mjs && python3 tests/report.test.py && python3 tests/brief.test.py",
+    "test": "node --experimental-strip-types tests/extension.test.mjs && python3 tests/report.test.py && python3 tests/brief.test.py && python3 tests/launcher.test.py",
     "test:extension": "node --experimental-strip-types tests/extension.test.mjs",
     "test:contract": "python3 tests/report.test.py && python3 tests/brief.test.py"
   }

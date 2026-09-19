@@ -14,7 +14,9 @@ the role briefs.
 Advisory posture: panel agents start with `--exclude-tools edit,write` and are
 briefed that the coordinator pane is the only writer. They keep bash for reading,
 running tests, and git inspection, so the rule is a contract rather than a kernel
-boundary; for a hard guarantee run each pane in its own git worktree.
+boundary; for a hard guarantee run each pane in its own git worktree. The flag
+name depends on the agent kind: pi removes `edit,write`, Claude Code denies
+`Write`, `Edit`, and `NotebookEdit`. See kind_flags().
 
 Usage:
   4pp.py [--rebrief] [--json] [-- task words ...]
@@ -398,6 +400,39 @@ def repair_drift(panes: list[dict], agents: list[dict], state_roles: dict) -> tu
     return fixed, cleared
 
 
+def kind_flags(kind: str, strict: bool, allow_write: bool) -> list[str]:
+    """Read-only posture, expressed in the language of the agent that runs.
+
+    Agent CLIs do not share flag names, so a no-write rule that is only briefed
+    is not a rule. pi removes `edit,write`. Claude Code denies `Write`, `Edit`,
+    and `NotebookEdit`, and in strict mode allows only its read tools.
+
+    Unknown kinds get no flags. Their posture is the brief alone, and the
+    launcher says so in the output.
+    """
+    flags: list[str] = []
+    model = os.environ.get("4PP_MODEL", "").strip()
+
+    if kind == "pi":
+        if strict:
+            flags += ["--tools", "read,grep,find,ls"]
+        elif not allow_write:
+            flags += ["--exclude-tools", "edit,write"]
+        if model:
+            flags += ["--model", model]
+        if os.environ.get("4PP_THINKING"):
+            flags += ["--thinking", os.environ["4PP_THINKING"]]
+    elif kind == "claude":
+        if strict:
+            flags += ["--allowedTools", "Read", "Grep", "Glob"]
+        elif not allow_write:
+            flags += ["--disallowedTools", "Write", "Edit", "NotebookEdit"]
+        if model:
+            flags += ["--model", model]
+
+    return flags
+
+
 def main() -> int:
     rebrief, as_json, task = parse_args(sys.argv[1:])
     task = task or os.environ.get("4PP_TASK", "").strip()
@@ -560,17 +595,7 @@ def main() -> int:
             panel[role] = {"pane_id": pane_id, "agent": "(occupied)", "status": "occupied: pane already runs an agent"}
             continue
         name = free_agent_name(AGENT_BASES[role], taken)
-        extra: list[str] = []
-        if kind == "pi":
-            # these flags are pi-specific; other agent kinds get their defaults
-            if strict:
-                extra += ["--tools", "read,grep,find,ls"]
-            elif not allow_write:
-                extra += ["--exclude-tools", "edit,write"]
-            if os.environ.get("4PP_MODEL"):
-                extra += ["--model", os.environ["4PP_MODEL"]]
-            if os.environ.get("4PP_THINKING"):
-                extra += ["--thinking", os.environ["4PP_THINKING"]]
+        extra = kind_flags(kind, strict, allow_write)
         cmd = ["agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", str(START_TIMEOUT_MS)]
         if extra:
             cmd += ["--", *extra]

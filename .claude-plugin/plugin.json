@@ -1,7 +1,7 @@
 {
   "name": "4p",
   "description": "A four-pane advisory panel for coding agents: AMO (the critical eye), tester, reviewer, and big picture, as live agents in your terminal.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "itlmkz",
     "url": "https://github.com/itlmkz"
