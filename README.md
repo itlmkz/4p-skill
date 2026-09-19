@@ -30,7 +30,7 @@ npm test
 
 ## Install
 
-One repository, two hosts. The `panel/` launcher and the `skills/` contract are
+One repository, two hosts. The `panel/` launcher and the `skill/` contract are
 shared. Only the entry point differs.
 
 **pi**
@@ -217,7 +217,10 @@ configuration is not built yet. See `docs/ROADMAP.md`.
 extensions/four-p.ts        pi entry point: registers /4p
 commands/4p.md              Claude Code entry point: /4p:4p
 .claude-plugin/             Claude Code plugin and marketplace manifests
-skills/four-p-panel/        the contract, shared by both hosts
+skill/four-p-panel/         the contract for pi. Named in the singular on purpose:
+                            Claude Code auto-scans skills/ at the plugin root, and a
+                            second component there would add a second entry to the
+                            same /4p: namespace.
 panel/4p.py                 the launcher (stdlib only), shared by both hosts
 panel/report.schema.json    the report contract, single source of truth
 panel/report.py             validate, extract, and describe the contract

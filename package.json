@@ -1,6 +1,6 @@
 {
   "name": "4p-skill",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A four-pane advisory panel for coding agents: AMO (the critical eye), tester, reviewer, and big picture, as live agents in your terminal.",
   "keywords": [
     "pi-package",
@@ -19,12 +19,12 @@
       "./extensions"
     ],
     "skills": [
-      "./skills"
+      "./skill"
     ]
   },
   "files": [
     "extensions",
-    "skills",
+    "skill",
     "commands",
     "panel",
     ".claude-plugin",

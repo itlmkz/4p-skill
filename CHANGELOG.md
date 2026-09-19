@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0
+
+One `/4p` in Claude Code, and pi panes by default.
+
+The plugin exposed two components, `4p` from `commands/4p.md` and `four-p-panel`
+from `skills/`. Both sat under the `/4p:` namespace, so typing `/4p` showed two
+entries. The skill also cost about 160 always-on tokens for knowledge the command
+already carries.
+
+- Moved the shared skill to `skill/`, which Claude Code does not auto-scan. The
+  plugin now exposes exactly one component, so there is one `/4p:4p`. pi reads
+  the same skill through the `pi.skills` manifest path, so nothing is duplicated.
+- The Claude Code command no longer overrides the pane kind. Panes are pi, which
+  is the launcher's own default and the kind whose write tools are removed at
+  launch. Set `4PP_KIND` to choose another.
+
 ## 0.3.0
 
 Enforce the no-write posture for Claude Code panes.
