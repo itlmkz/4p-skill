@@ -43,6 +43,7 @@ from string import Template
 
 LABEL_PREFIX = "4pp:"
 REPORT_DIR = "/tmp/4pp"
+PANEL_DIR = os.path.dirname(os.path.abspath(__file__))
 START_TIMEOUT_MS = 90000
 PROMPT_TIMEOUT_MS = 240000
 
@@ -102,11 +103,10 @@ def load_contract() -> tuple[str, str]:
     Derived from report.schema.json, which is the single source of truth.
     If it cannot be read, the brief says so instead of guessing a shape.
     """
-    panel_dir = os.path.dirname(os.path.abspath(__file__))
-    validator = os.path.join(panel_dir, "report.py")
+    validator = os.path.join(PANEL_DIR, "report.py")
     try:
-        if panel_dir not in sys.path:
-            sys.path.insert(0, panel_dir)
+        if PANEL_DIR not in sys.path:
+            sys.path.insert(0, PANEL_DIR)
         from report import describe, load_schema
 
         return describe(load_schema()), validator
@@ -298,9 +298,9 @@ def brief_for(role: str, ctx: dict) -> str:
     return head + "\n[ROLE]\n" + body + BRIEF_TAIL.substitute(**ctx)
 
 
-def parse_args(argv: list[str]) -> tuple[bool, bool, str]:
-    """Return (rebrief, as_json, task). Unknown flags are an error, never silently dropped."""
-    known = {"--rebrief": "rebrief", "--json": "json", "--help": "help", "-h": "help"}
+def parse_args(argv: list[str]) -> tuple[bool, bool, bool, str]:
+    """Return (rebrief, as_json, collect, task). Unknown flags are an error."""
+    known = {"--rebrief": "rebrief", "--json": "json", "--collect": "collect", "--help": "help", "-h": "help"}
     flags: dict[str, bool] = {}
     task_words: list[str] = []
     rest = False
@@ -312,7 +312,7 @@ def parse_args(argv: list[str]) -> tuple[bool, bool, str]:
         elif arg in known:
             flags[known[arg]] = True
         elif arg == "-":
-            task_words.append(arg)  # bare dash is stdin convention, not a flag
+            task_words.append(arg)
         elif arg.startswith("-"):
             die(f"unknown flag '{arg}'. Known: {', '.join(sorted(known))}. Use -- before task text starting with a dash.")
         else:
@@ -320,7 +320,7 @@ def parse_args(argv: list[str]) -> tuple[bool, bool, str]:
     if flags.get("help"):
         print(__doc__)
         sys.exit(0)
-    return bool(flags.get("rebrief")), bool(flags.get("json")), " ".join(task_words).strip()
+    return bool(flags.get("rebrief")), bool(flags.get("json")), bool(flags.get("collect")), " ".join(task_words).strip()
 
 
 def load_state(state_path: str, max_age_s: int = 24 * 3600) -> dict:
@@ -434,9 +434,79 @@ def kind_flags(kind: str, strict: bool, allow_write: bool) -> list[str]:
     return flags
 
 
+COLLECT_TIMEOUT_MS = 300000  # 5 min per pane
+
+
+def collect_reports(state_path: str, tab_dir: str) -> int:
+    """Wait for all panel panes in parallel, read their output, extract reports.
+
+    Returns 0 when all four reports are collected. Prints JSON to stdout.
+    """
+    if PANEL_DIR not in sys.path:
+        sys.path.insert(0, PANEL_DIR)
+    from report import extract, validate_report, load_schema
+
+    state = load_state(state_path)
+    roles = state.get("roles") or {}
+    if not roles:
+        die(f"no panel state at {state_path}. Run the launcher first.")
+
+    schema = load_schema()
+
+    def _collect_one(item: tuple[str, dict]) -> tuple[str, dict]:
+        role, rec = item
+        agent = rec.get("agent", "")
+        pane_id = rec.get("pane_id", "")
+        if not agent:
+            return role, {"status": "no agent", "report": None, "errors": []}
+        # Wait for the pane to finish.
+        wait_payload = herdr("agent", "wait", agent, "--timeout", str(COLLECT_TIMEOUT_MS), check=False)
+        if wait_payload.get("_returncode") != 0:
+            err = (wait_payload.get("error") or {}).get("message") or wait_payload.get("raw") or "wait failed"
+            # Still try to read whatever the pane produced.
+        # Read the pane output.
+        read_payload = herdr(
+            "agent", "read", agent, "--source", "recent-unwrapped", "--lines", "200",
+            check=False,
+        )
+        raw = read_payload.get("output") or read_payload.get("raw") or ""
+        if not raw and read_payload.get("_returncode") != 0:
+            err = (read_payload.get("error") or {}).get("message") or "read failed"
+            return role, {"status": f"read failed: {err}", "report": None, "errors": []}
+        # Extract the JSON block.
+        report, how = extract(raw)
+        if report is None:
+            return role, {"status": f"no json block ({how})", "report": None, "errors": []}
+        # Validate.
+        errors = validate_report(report, schema)
+        if errors:
+            return role, {"status": "invalid", "report": report, "errors": errors}
+        return role, {"status": "ok", "report": report, "errors": []}
+
+    items = list(roles.items())
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=len(items)) as pool:
+        for role, result in pool.map(_collect_one, items):
+            results[role] = result
+
+    out = {
+        "tab": state.get("tab", ""),
+        "reports": results,
+        "all_ok": all(r["status"] == "ok" for r in results.values()),
+    }
+    print(json.dumps(out, indent=2))
+    return 0 if out["all_ok"] else 1
+
+
 def main() -> int:
-    rebrief, as_json, task = parse_args(sys.argv[1:])
+    rebrief, as_json, collect, task = parse_args(sys.argv[1:])
     task = task or os.environ.get("4PP_TASK", "").strip()
+
+    if collect:
+        tab_id = os.environ.get("HERDR_TAB_ID") or die("HERDR_TAB_ID missing")
+        tab_dir = os.path.join(REPORT_DIR, tab_id.replace(":", "-"))
+        state_path = os.path.join(tab_dir, "panel.json")
+        return collect_reports(state_path, tab_dir)
 
     if os.environ.get("HERDR_ENV") != "1":
         die("not inside a Herdr pane (HERDR_ENV != 1). Run /4pp from a pi session inside Herdr.")

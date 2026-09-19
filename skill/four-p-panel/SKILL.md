@@ -55,7 +55,58 @@ need it to run tests. For an enforced version, set `4PP_STRICT_NO_WRITE=1` and
 the panes get `read,grep,find,ls` only, at the cost of not being able to run
 tests.
 
-## Driving the panel afterwards
+## THE DELEGATION RULE
+
+This is the most important section. Read it before doing anything else.
+
+When a task is given, the panel is the input to your implementation, not an
+afterthought. You MUST NOT start coding, editing, or implementing until you have
+collected and merged the panel reports.
+
+The mandatory sequence after launching the panel with a task:
+
+1. **Launch**: run the launcher. It fans the task out to all four panes in
+   parallel and returns immediately.
+2. **Collect**: run `4p.py --collect`. It waits for all four panes in parallel,
+   reads their output, extracts the JSON reports, validates them, and prints
+   the results as one JSON object to stdout.
+3. **Read**: read the JSON output. Each role has a `status` and a `report`.
+4. **Merge**: present one merged view to the user (see Merge rules below).
+5. **Implement**: only now, apply the findings from the merged report.
+
+You MUST NOT skip step 2. You MUST NOT implement before step 4. The panes exist
+to catch what you miss. If you skip them, the panel is wasted.
+
+### The collect command
+
+```bash
+python3 panel/4p.py --collect
+```
+
+This reads the panel state, waits for all panes in parallel (5 min timeout per
+pane), reads each pane's output, extracts and validates the JSON report, and
+prints one JSON object:
+
+```json
+{
+  "tab": "wJ:t3",
+  "reports": {
+    "contraire": {"status": "ok", "report": {...}, "errors": []},
+    "tester":    {"status": "ok", "report": {...}, "errors": []},
+    "reviewer":  {"status": "ok", "report": {...}, "errors": []},
+    "bigpicture":{"status": "ok", "report": {...}, "errors": []}
+  },
+  "all_ok": true
+}
+```
+
+A pane whose `status` is not `"ok"` either failed to produce a report or
+produced an invalid one. Report the failure to the user; do not guess what the
+pane meant.
+
+## Driving the panel manually
+
+For sending follow-up tasks to individual panes after the initial collect:
 
 ```bash
 herdr agent prompt <name> "<task>" --wait --timeout 600000   # one pane, blocking
@@ -72,6 +123,28 @@ task to all four only when a full cross-check justifies the cost.
 Agent names may carry a numeric suffix when a base name is already live in
 another workspace (`tester-2`). Always take real names from the launcher output
 or `herdr agent list`. Never assume them.
+
+## Merge rules
+
+Present one merged view, not four summaries:
+
+1. **Agreements first.** Where all panes converge, state that plainly.
+2. **Blocking findings.** Any finding where `blocks` is true is a real risk:
+   data loss, security, a broken deploy, an irreversible choice, or a silent
+   behavior change. These gate the merge.
+3. **Strongest objection per seat.** One per role, ranked by severity.
+4. **Questions for the owner.** Anything in `questions[]` belongs to the user.
+   Present each with a recommendation. Never present a decision bare.
+5. **Your disposition.** After incorporating the panel's findings, state whether
+   you would ship, fix first, or hold.
+
+Use the fields that carry the decision: `verdict`, `confidence`,
+`findings[].blocks`, `findings[].severity`, `assumptions`, `questions`, and
+`could_not_verify`. A finding whose `blocks` is true is a real risk. Treat
+`confidence` below 0.6 as a signal to escalate, not to act.
+
+Anything the panes flagged in `questions` belongs to the owner. Put those
+decisions to the user with a recommendation. Never present a decision bare.
 
 ## Reporting rules
 
