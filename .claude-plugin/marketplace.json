@@ -1,0 +1,31 @@
+{
+  "name": "4p",
+  "owner": {
+    "name": "itlmkz",
+    "url": "https://github.com/itlmkz"
+  },
+  "metadata": {
+    "description": "The 4p four-pane advisory panel. One plugin, installable by Claude Code and by pi from the same repository."
+  },
+  "plugins": [
+    {
+      "name": "4p",
+      "source": "./",
+      "description": "Four advisors in four terminal panes: AMO (the critical eye), tester, reviewer, and big picture. They advise, you write the code.",
+      "version": "0.1.0",
+      "author": {
+        "name": "itlmkz"
+      },
+      "homepage": "https://github.com/itlmkz/4p-skill",
+      "repository": "https://github.com/itlmkz/4p-skill",
+      "license": "MIT",
+      "keywords": [
+        "advisory-panel",
+        "devils-advocate",
+        "code-review",
+        "herdr",
+        "agents"
+      ]
+    }
+  ]
+}

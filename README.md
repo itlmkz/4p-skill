@@ -30,19 +30,49 @@ npm test
 
 ## Install
 
+One repository, two hosts. The `panel/` launcher and the `skills/` contract are
+shared. Only the entry point differs.
+
+**pi**
+
 ```bash
 pi install git:github.com/itlmkz/4p-skill
 ```
 
+**Claude Code**
+
+```bash
+claude plugin marketplace add itlmkz/4p-skill
+claude plugin install 4p@4p
+```
+
+Claude Code namespaces plugin commands, so the command is `/4p:4p` there.
+
+Both hosts need [Herdr](https://github.com/), because the panel is four Herdr
+panes. Herdr must have the integration for the agent kind you run. Check with
+`herdr agent start --help`.
+
 Not published to npm yet.
 
 ## Use
+
+**pi**
 
 ```
 /4p                  open the panel and leave it standing by
 /4p <task>           open it and fan the task out to all four seats
 /4p --rebrief <task> re-send the role briefs first
 ```
+
+**Claude Code**
+
+```
+/4p:4p                same, with the arguments after the command name
+```
+
+Pane kind defaults to the host: `pi` from the pi extension, `claude` from the
+Claude Code command. Override either with `4PP_KIND`. Any kind Herdr supports
+works, so a Claude Code session can run a panel of pi panes, or the reverse.
 
 The launcher is idempotent. Panes carry a `4pp:<role>` label and the panel is
 recorded in `/tmp/4pp/<tab>/panel.json`, so re-running reuses the live panel,
@@ -173,9 +203,11 @@ configuration is not built yet. See `docs/ROADMAP.md`.
 ## Layout
 
 ```
-extensions/four-p.ts        registers /4p
-skills/four-p-panel/        the contract: seats, driving, reporting rules
-panel/4p.py                 the launcher (stdlib only)
+extensions/four-p.ts        pi entry point: registers /4p
+commands/4p.md              Claude Code entry point: /4p:4p
+.claude-plugin/             Claude Code plugin and marketplace manifests
+skills/four-p-panel/        the contract, shared by both hosts
+panel/4p.py                 the launcher (stdlib only), shared by both hosts
 panel/report.schema.json    the report contract, single source of truth
 panel/report.py             validate, extract, and describe the contract
 tests/                      extension, contract, and brief tests

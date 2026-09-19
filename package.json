@@ -25,7 +25,9 @@
   "files": [
     "extensions",
     "skills",
+    "commands",
     "panel",
+    ".claude-plugin",
     "README.md",
     "LICENSE"
   ],
