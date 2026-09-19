@@ -38,6 +38,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from string import Template
 
 LABEL_PREFIX = "4pp:"
@@ -575,9 +576,14 @@ def main() -> int:
         assigned[role] = target
 
     # 4. Start agents on labeled panes that hold none. Never touch an occupied pane.
+    #    All agent starts run in parallel so the panel comes up in one wall-clock timeout
+    #    instead of four serial ones.
     taken = {a["name"] for a in live_agents() if a.get("name")}
     agents_by_pane = {a["pane_id"]: a for a in live_agents()}
     panel: dict[str, dict] = {}
+
+    # Classify every role before starting any agent.
+    roles_to_start: list[tuple[str, str, list[str]]] = []  # (role, name, cmd)
     for role in ROLE_ORDER:
         if role in role_failures:
             panel[role] = role_failures[role]
@@ -599,14 +605,24 @@ def main() -> int:
         cmd = ["agent", "start", name, "--kind", kind, "--pane", pane_id, "--timeout", str(START_TIMEOUT_MS)]
         if extra:
             cmd += ["--", *extra]
+        roles_to_start.append((role, name, cmd))
+
+    def _start_agent(item: tuple[str, str, list[str]]) -> tuple[str, dict]:
+        role, name, cmd = item
+        pane_id = assigned[role]["pane_id"]
         payload = herdr(*cmd, check=False)
         if payload.get("_returncode") != 0:
             err = (payload.get("error") or {}).get("message") or payload.get("raw") or "unknown error"
-            panel[role] = {"pane_id": pane_id, "agent": name, "status": f"FAILED: {err}"}
-            continue
-        panel[role] = {"pane_id": pane_id, "agent": name, "status": "started"}
+            return role, {"pane_id": pane_id, "agent": name, "status": f"FAILED: {err}"}
+        return role, {"pane_id": pane_id, "agent": name, "status": "started"}
 
-    # 5. Send role briefs.
+    if roles_to_start:
+        with ThreadPoolExecutor(max_workers=len(roles_to_start)) as pool:
+            for role, entry in pool.map(_start_agent, roles_to_start):
+                panel[role] = entry
+
+    # 5. Send role briefs. All briefs go out in parallel so four 240s waits
+    #    overlap instead of stacking.
     contract, validator = load_contract()
     ctx_base = {
         "CWD": os.getcwd(),
@@ -619,6 +635,8 @@ def main() -> int:
         "BRIEF_VERSION": BRIEF_VERSION,
         "PEERS": ", ".join(f"{ROLE_NAMES[r]}={panel[r]['pane_id']}" for r in ROLE_ORDER),
     }
+
+    briefs_to_send: list[tuple[str, str, str]] = []  # (role, agent_name, prompt)
     for role in ROLE_ORDER:
         entry = panel[role]
         if entry["status"] == "caller" or entry["status"].startswith("FAILED") or entry["status"].startswith("occupied"):
@@ -627,21 +645,24 @@ def main() -> int:
             continue
         ctx = dict(ctx_base, PANE_ID=entry["pane_id"])
         prompt = brief_for(role, ctx)
+        briefs_to_send.append((role, entry["agent"], prompt))
+
+    def _send_brief(item: tuple[str, str, str]) -> tuple[str, str]:
+        role, agent_name, prompt = item
         payload = herdr(
-            "agent",
-            "prompt",
-            entry["agent"],
-            prompt,
-            "--wait",
-            "--timeout",
-            str(PROMPT_TIMEOUT_MS),
+            "agent", "prompt", agent_name, prompt,
+            "--wait", "--timeout", str(PROMPT_TIMEOUT_MS),
             check=False,
         )
         if payload.get("_returncode") != 0:
             err = (payload.get("error") or {}).get("message") or payload.get("raw") or "unknown error"
-            entry["brief"] = f"FAILED: {err}"
-        else:
-            entry["brief"] = "sent"
+            return role, f"FAILED: {err}"
+        return role, "sent"
+
+    if briefs_to_send:
+        with ThreadPoolExecutor(max_workers=len(briefs_to_send)) as pool:
+            for role, brief_status in pool.map(_send_brief, briefs_to_send):
+                panel[role]["brief"] = brief_status
 
     # 6. Optional fan-out of a task to the whole panel.
     if task:
