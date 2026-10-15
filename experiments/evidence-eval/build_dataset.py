@@ -5,7 +5,8 @@ Every label is set by construction and proven by `--check`, which re-derives it
 from the item's own diff text. See PREREG.md for the item schema and kinds.
 
     python3 build_dataset.py --cache-dir DIR      # build data/mechanical.jsonl, data/decoy.jsonl
-    python3 build_dataset.py --check              # re-derive every label, exit 1 on a mismatch
+    python3 build_dataset.py --cache-dir DIR --version v2   # build data/v2/*.jsonl (PREREG-v2.md)
+    python3 build_dataset.py --check              # re-derive every label (v1 and v2), exit 1 on a mismatch
     python3 build_dataset.py --check FILE ...     # same, on other jsonl files
 
 Sources are pinned public commits (SOURCES below). itlmkz/4p-skill is read from
@@ -246,7 +247,7 @@ def parse_diff(diff: str) -> list[Hunk]:
     old_rem = new_rem = 0
     old_no = new_no = 0
     pos = 0
-    for raw in diff.splitlines(keepends=True):
+    for raw in re.findall(r"[^\n]*\n|[^\n]+\Z", diff):  # only "\n" ends a line, as in arms.changed_lines
         line = raw.rstrip("\n")
         start = pos
         pos += len(raw)
@@ -742,6 +743,313 @@ def build(cache_dir: str) -> None:
         sys.exit(1)
 
 
+# --- v2 (PREREG-v2.md): new repos, near_line, bounded wrong_line ----------
+# Nothing above changes for v2, so v1 output stays byte-identical.
+
+DATA_V2 = os.path.join(DATA, "v2")
+MECH_KINDS_V2 = [
+    ("true_added", 20),
+    ("true_removed", 20),
+    ("near_line", 20),
+    ("wrong_line", 15),
+    ("wrong_file", 15),
+    ("negated", 15),
+    ("fabricated", 15),
+]
+DECOY_KINDS_V2 = [("empty_diff", 6), ("truncated_evidence", 6)]
+TRUE_KINDS_V2 = {"true_added", "true_removed", "near_line"}
+WRONG_LINE_V2 = (6, 15)  # v2 wrong_line cites this many lines off, inclusive
+MIN_CITED_FILE_LINES = 10  # wrong_file cites a file at least this long
+V2_PREFIXES = ("mech2-", "decoy2-")
+LENGTH_RE = re.compile(r"that is (\d+) lines long")
+
+SOURCES_V2: dict[str, dict] = {
+    "encode/starlette": {
+        "url": "https://github.com/encode/starlette.git",
+        "commits": [
+            "004250a3f216e524839642a0eca60035e8302f68",
+            "04d7869c1ec3016fa11f58382a9ac7bc14b46662",
+            "167b5850e809f38b27fbfed62d58bf6442855975",
+            "25b8e179d8d7ed86769c02f648772dd5fb43dc3c",
+            "2686f64a1f5eba97e232b74074c6de14e4e41461",
+            "4ac5302dd465e8ca952b89daacf1bb8a5f571cf2",
+            "56d8858633c8e04113a231ddaf3e47acf1e3516d",
+            "5b544ced7345d8b2315419ecaded4b52bffe6b76",
+            "699dae42f5ee0a90b358d00db9aebe9c67e9283f",
+            "6ad24bb7809c2d833445d5b1cfb9e95c26260e56",
+            "6beaa2e39d3381e1d7ddb89d4cc7cbb8c7ac0961",
+            "8feafc64083403ff7fb7872248b7165968c91561",
+            "bc833498bbcb1d0acc8dc328a037d28f08e0dc4b",
+            "e7a0b007b601f5e4ff98424333fd2fb794a3f1e6",
+            "ff5b4df55ac4ac625582ecc446c850200c91ae64",
+        ],
+    },
+    "sindresorhus/execa": {
+        "url": "https://github.com/sindresorhus/execa.git",
+        "commits": [
+            "15c46cd4c2b6ea529f063a47934543186c56aa27",
+            "1cee524b9cbd726becb17c665a4e2e0ff0129623",
+            "516a5e20b284c7c6667ff2cc2af12de096be96ff",
+            "5464d4368fecfafa18146eb6d36f1e497d6bbfdd",
+            "59de0651d1807381dd88ffb54b779ba9a4c18e23",
+            "91d9ded63939de61898fa04286cafdf720e15373",
+            "9842f1a26debc7ab31c7bdfa7f0256a7ec33c3fc",
+            "a2eda67b7860278a7c86cb09f62ae9d80d93c61c",
+            "b2c3a54c87586f0441ba7e0178c1eef377a989dc",
+            "b548d8b72fe40ee5f986c44312f9c964da760828",
+            "bfe4633a3a5d1197f7830cc41056bee11084bff7",
+            "c6c66dade58cf8ea533686c8c60bf3e597b5d66b",
+            "d9a5689977af191dce377c4d11c248b11dd10438",
+            "e0b5dbc3a9b6980a288eeb565447aed0dcd9dd28",
+            "e6b012afb1f22c9853d2b25745ca653b47562e98",
+        ],
+    },
+}
+
+
+class RepoFiles:
+    """File lists and line counts per commit side, read from git and cached."""
+
+    def __init__(self, paths: dict[str, str]):
+        self.paths = paths  # commit -> repo dir
+        self._trees: dict[tuple[str, str], list[str]] = {}
+        self._lens: dict[tuple[str, str, str], int] = {}
+
+    @staticmethod
+    def rev(commit: str, op: str) -> str:
+        return commit if op == "+" else f"{commit}^"
+
+    def tree(self, commit: str, op: str) -> list[str]:
+        key = (commit, op)
+        if key not in self._trees:
+            names = git(self.paths[commit], "ls-tree", "-r", "--name-only", self.rev(commit, op))
+            self._trees[key] = sorted(n for n in names.splitlines() if n.endswith(CODE_EXTS))
+        return self._trees[key]
+
+    def length(self, commit: str, op: str, file: str) -> int:
+        key = (commit, op, file)
+        if key not in self._lens:
+            text = git(self.paths[commit], "show", f"{self.rev(commit, op)}:{file}")
+            self._lens[key] = len(text.splitlines())
+        return self._lens[key]
+
+
+def offset_line(rng: random.Random, ln: Line, dist: int, length: int) -> int | None:
+    """ln.no moved by dist lines up or down, staying inside 1..length."""
+    ways = [n for n in (ln.no - dist, ln.no + dist) if 1 <= n <= length]
+    return rng.choice(ways) if ways else None
+
+
+def cited_file_v2(rng: random.Random, unit: Unit, ln: Line, files: RepoFiles, inside: bool) -> str | None:
+    """Another code file on the claim's side, in the diff or not, long enough to cite."""
+    tree = set(files.tree(unit.commit, ln.op))
+    if inside:
+        pool = [f for f in unit.files if f != ln.file and f in tree]
+    else:
+        pool = [f for f in sorted(tree) if f not in unit.files]
+    pool = [f for f in pool if not any(w in f.lower() for w in BANNED)]
+    rng.shuffle(pool)
+    for f in pool:
+        if files.length(unit.commit, ln.op, f) >= MIN_CITED_FILE_LINES:
+            return f
+    return None
+
+
+def item_v2(iid: str, tier: str, kind: str, unit: Unit, diff: str, rng: random.Random,
+            claim: str, file: str, line: int, rationale: str) -> dict:
+    it = item(iid, tier, kind, unit, diff, rng, claim, file, line, rationale)
+    it["label"] = kind in TRUE_KINDS_V2
+    return it
+
+
+def build_mech_v2(units: list[Unit], rng: random.Random, used: set, files: RepoFiles) -> list[dict]:
+    slots = [k for k, n in MECH_KINDS_V2 for _ in range(n)]
+    rng.shuffle(slots)
+    n_near = dict(MECH_KINDS_V2)["near_line"]
+    n_far = dict(MECH_KINDS_V2)["wrong_line"]
+    n_file = dict(MECH_KINDS_V2)["wrong_file"]
+    # Offsets spread evenly: near 1..5, far 6..15; about half of wrong_file stays in the diff.
+    near_offsets = [1 + i % NEAR for i in range(n_near)]
+    lo, hi = WRONG_LINE_V2
+    far_offsets = [lo + i % (hi - lo + 1) for i in range(n_far)]
+    inside_flags = [i % 2 == 0 for i in range(n_file)]
+    for seq in (near_offsets, far_offsets, inside_flags):
+        rng.shuffle(seq)
+    count = {id(u): 0 for u in units}
+    names = {id(u): diff_names(u.diff) for u in units}
+    citable: dict[tuple[str, str, str, bool], bool] = {}
+
+    def can_cite(u: Unit, ln: Line, inside: bool) -> bool:
+        key = (u.commit, ln.op, ln.file, inside)
+        if key not in citable:
+            citable[key] = cited_file_v2(random.Random(0), u, ln, files, inside) is not None
+        return citable[key]
+
+    out: list[dict] = []
+    for kind in slots:
+        ops = {"true_added": ["+"], "true_removed": ["-"]}.get(kind, ["+", "-"])
+        dist = near_offsets[-1] if kind == "near_line" else far_offsets[-1] if kind == "wrong_line" else 0
+        inside = inside_flags[-1] if kind == "wrong_file" else False
+
+        def free(u: Unit, op: str) -> list[Line]:
+            lines = [ln for ln in u.cands[op] if (u.commit, ln.file, ln.op, ln.no) not in used]
+            if kind == "fabricated":
+                probe = random.Random(0)
+                lines = [ln for ln in lines
+                         if fabricate(probe, ln.text.strip(), u.diff, names[id(u)], lang_of(ln.file))]
+            elif kind in ("near_line", "wrong_line"):
+                lines = [ln for ln in lines
+                         if offset_line(random.Random(0), ln, dist, len(u.sources[(op, ln.file)]))]
+            elif kind == "wrong_file":
+                lines = [ln for ln in lines if can_cite(u, ln, inside)]
+            return lines
+
+        feasible = [u for u in units if any(free(u, op) for op in ops)]
+        if not feasible:
+            raise SystemExit(f"v2: no unit can host a {kind} item")
+        low = min(count[id(u)] for u in feasible)
+        unit = rng.choice([u for u in feasible if count[id(u)] == low])
+        op = rng.choice([o for o in ops if free(unit, o)])
+        ln = rng.choice(free(unit, op))
+        snip = ln.text.strip()
+        iid = f"mech2-{len(out) + 1:04d}"
+        side = "new" if op == "+" else "old"
+        verb = "added" if op == "+" else "removed"
+        cite_file, cite_line = ln.file, ln.no
+        if kind in ("true_added", "true_removed"):
+            func, file = where_parts(rng, unit, ln, True)
+            claim = make_claim(rng, op, snip, func, file)
+            why = f"`{snip}` is an {verb} line at {side} line {ln.no} of {ln.file}, exactly where the evidence points."
+        elif kind in ("near_line", "wrong_line"):
+            func, file = where_parts(rng, unit, ln, True)
+            claim = make_claim(rng, op, snip, func, file)
+            cite_line = offset_line(rng, ln, dist, len(unit.sources[(op, ln.file)]))  # type: ignore[assignment]
+            if kind == "near_line":
+                near_offsets.pop()
+                why = (f"The claim holds at {side} line {ln.no} of {ln.file}; the evidence cites line {cite_line}, "
+                       f"{dist} line(s) off, inside the {NEAR}-line rule, so it is supported.")
+            else:
+                far_offsets.pop()
+                why = (f"The claim holds at {side} line {ln.no} of {ln.file}, but the evidence cites line "
+                       f"{cite_line}, {dist} lines away, outside the {NEAR}-line rule.")
+        elif kind == "wrong_file":
+            inside_flags.pop()
+            func, _ = where_parts(rng, unit, ln, False)
+            claim = make_claim(rng, op, snip, func, None)
+            cite_file = cited_file_v2(rng, unit, ln, files, inside)  # type: ignore[assignment]
+            length = files.length(unit.commit, op, cite_file)
+            cite_line = ln.no if ln.no <= length else rng.randint(1, length)
+            where = "a file in the diff" if inside else "a file outside the diff"
+            why = (f"The claim holds in {ln.file}, but the evidence cites line {cite_line} of {cite_file}, "
+                   f"{where} that is {length} lines long on the {side} side.")
+        elif kind == "negated":
+            func, file = where_parts(rng, unit, ln, True)
+            flip = "-" if op == "+" else "+"
+            claim = make_claim(rng, flip, snip, func, file)
+            said = "removed" if flip == "-" else "added"
+            why = f"`{snip}` is {verb} at {side} line {ln.no} of {ln.file}; the claim says it is {said}."
+        else:  # fabricated
+            fake = fabricate(rng, snip, unit.diff, names[id(unit)], lang_of(ln.file))
+            func, file = where_parts(rng, unit, ln, True)
+            claim = make_claim(rng, op, fake, func, file)  # type: ignore[arg-type]
+            why = (f"The quoted `{fake}` appears nowhere in the diff; the cited line {ln.no} of "
+                   f"{ln.file} actually reads `{snip}`.")
+        used.add((unit.commit, ln.file, ln.op, ln.no))
+        count[id(unit)] += 1
+        out.append(item_v2(iid, "mechanical", kind, unit, unit.diff, rng, claim, cite_file, cite_line, why))
+    return out
+
+
+def cut_mid_hunk(diff: str, hunk: Hunk, keep: int) -> str:
+    """The diff up to the hunk header plus its first `keep` body lines."""
+    pos = hunk.offset
+    raws = diff[pos:].splitlines(keepends=True)
+    pos += len(raws[0])  # the "@@" header
+    kept = 0
+    for raw in raws[1:]:
+        if kept == keep:
+            break
+        pos += len(raw)
+        if not raw.startswith("\\"):
+            kept += 1
+    return diff[:pos]
+
+
+def build_decoy_v2(units: list[Unit], rng: random.Random, used: set) -> list[dict]:
+    slots = [k for k, n in DECOY_KINDS_V2 for _ in range(n)]
+    out: list[dict] = []
+    pool = sorted(units, key=lambda u: (u.repo, u.commit))
+    taken: set[str] = set()
+    n_cut = 0
+    for kind in slots:
+        mid = kind == "truncated_evidence" and n_cut % 2 == 1  # every other cut lands inside a hunk
+        picks = []
+        for u in pool:
+            for op in ("+", "-"):
+                for ln in u.cands[op]:
+                    if (u.commit, ln.file, ln.op, ln.no) in used:
+                        continue
+                    if kind == "truncated_evidence":
+                        h = hunk_of(u, ln)
+                        if mid and h.lines.index(ln) < 2:
+                            continue
+                        if not mid and ln.hunk == 0:
+                            continue
+                    picks.append((u, ln))
+        fresh = [p for p in picks if p[0].commit not in taken] or picks
+        unit, ln = rng.choice(fresh)
+        taken.add(unit.commit)
+        used.add((unit.commit, ln.file, ln.op, ln.no))
+        snip = ln.text.strip()
+        func, file = where_parts(rng, unit, ln, True)
+        claim = make_claim(rng, ln.op, snip, func, file)
+        iid = f"decoy2-{len(out) + 1:03d}"
+        if kind == "empty_diff":
+            diff = ""
+            why = "The diff is empty, so no evidence can support the claim."
+        else:
+            n_cut += 1
+            h = hunk_of(unit, ln)
+            if mid:
+                keep = rng.randint(1, h.lines.index(ln))
+                diff = cut_mid_hunk(unit.diff, h, keep)
+                why = (f"The diff stops {keep} line(s) into the hunk holding line {ln.no} of {ln.file}, "
+                       f"before that line, so the evidence is missing.")
+            else:
+                diff = unit.diff[: h.file_offset if h.first_in_file else h.offset]
+                why = f"The diff is cut before the hunk holding line {ln.no} of {ln.file}, so the evidence is missing."
+        out.append(item_v2(iid, "decoy", kind, unit, diff, rng, claim, ln.file, ln.no, why))
+    return out
+
+
+def build_v2(cache_dir: str) -> None:
+    units: list[Unit] = []
+    paths: dict[str, str] = {}
+    for name in sorted(SOURCES_V2):
+        spec = SOURCES_V2[name]
+        path = repo_dir(name, spec, cache_dir)
+        for sha in sorted(spec["commits"]):
+            units.append(load_unit(name, path, sha))
+            paths[sha] = path
+    rng = random.Random(SEED)
+    used: set = set()
+    mech = build_mech_v2(units, rng, used, RepoFiles(paths))
+    decoy = build_decoy_v2(units, rng, used)
+    os.makedirs(DATA_V2, exist_ok=True)
+    out_paths = []
+    for fname, items in (("mechanical.jsonl", mech), ("decoy.jsonl", decoy)):
+        out_paths.append(os.path.join(DATA_V2, fname))
+        with open(out_paths[-1], "w", encoding="utf-8", newline="\n") as f:
+            for it in items:
+                f.write(json.dumps(it, ensure_ascii=True) + "\n")
+    bad = check_files(out_paths)
+    print(f"wrote {len(mech)} v2 mechanical, {len(decoy)} v2 decoy items from {len(units)} diffs")
+    if bad:
+        for b in bad:
+            print(f"CHECK FAIL  {b}")
+        sys.exit(1)
+
+
 # --- check: re-derive every label from the item's own text -----------------
 
 
@@ -772,6 +1080,7 @@ def derive(it: dict) -> tuple[bool | None, list[str]]:
 
     # Kind-specific shape, so a mislabeled kind is caught too.
     kind = it.get("kind")
+    v2 = str(it.get("id", "")).startswith(V2_PREFIXES)
     in_file = [ln for ln in hits if ln.file == ev["file"]]
     if kind in ("true_added", "true_removed"):
         want = "+" if kind == "true_added" else "-"
@@ -780,9 +1089,19 @@ def derive(it: dict) -> tuple[bool | None, list[str]]:
     elif kind == "wrong_line":
         if not in_file or any(abs(ln.no - ev["line"]) <= NEAR for ln in in_file):
             problems.append("wrong_line: snippet not in the cited file, or citation within 5 lines")
+        lo, hi = WRONG_LINE_V2
+        if v2 and not all(lo <= abs(ln.no - ev["line"]) <= hi for ln in in_file):
+            problems.append(f"wrong_line: v2 citation is not {lo} to {hi} lines off")
+    elif kind == "near_line":
+        if not v2 or not any(1 <= abs(ln.no - ev["line"]) <= NEAR for ln in in_file):
+            problems.append(f"near_line: citation is not 1 to {NEAR} lines off")
     elif kind == "wrong_file":
         if not hits or in_file:
             problems.append("wrong_file: claim does not hold elsewhere, or holds in the cited file")
+        if v2:
+            m = LENGTH_RE.search(it.get("rationale", ""))
+            if not m or not 1 <= ev["line"] <= int(m.group(1)):
+                problems.append("wrong_file: v2 cited line is not inside the cited file's length")
     elif kind == "negated":
         flip = "-" if op == "+" else "+"
         opp = [ln for ln in lines if ln.op == flip and snip in ln.text and ln.file == ev["file"]]
@@ -827,10 +1146,12 @@ def check_files(paths: list[str]) -> list[str]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cache-dir", help="where public repos are cloned when missing")
-    ap.add_argument("--check", nargs="*", metavar="FILE", help="re-derive labels (default: both data files)")
+    ap.add_argument("--check", nargs="*", metavar="FILE", help="re-derive labels (default: v1 and v2 data files)")
+    ap.add_argument("--version", choices=["v1", "v2"], default="v1", help="which dataset to build (default v1)")
     args = ap.parse_args()
     if args.check is not None:
-        paths = args.check or [os.path.join(DATA, "mechanical.jsonl"), os.path.join(DATA, "decoy.jsonl")]
+        defaults = [os.path.join(d, f) for d in (DATA, DATA_V2) for f in ("mechanical.jsonl", "decoy.jsonl")]
+        paths = args.check or [p for p in defaults if os.path.exists(p)]
         bad = check_files(paths)
         total = sum(1 for p in paths for raw in open(p, encoding="utf-8") if raw.strip())
         for b in bad:
@@ -839,7 +1160,7 @@ def main() -> None:
         sys.exit(1 if bad else 0)
     if not args.cache_dir:
         ap.error("--cache-dir is required to build")
-    build(os.path.abspath(args.cache_dir))
+    (build_v2 if args.version == "v2" else build)(os.path.abspath(args.cache_dir))
 
 
 if __name__ == "__main__":

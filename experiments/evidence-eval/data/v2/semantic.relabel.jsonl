@@ -1,0 +1,100 @@
+{"id": "blind-001", "label": true, "confidence": 0.85, "reason": "New line 89 `kwargs.setdefault(\"cls\", cls)` sits at the same indent as the new `if cls is not _json.JSONEncoder:` and runs unconditionally, so the check changes nothing in the dump defaults."}
+{"id": "blind-002", "label": false, "confidence": 0.9, "reason": "Line 481 does wrap with `self.ensure_sync(func)()`, but what ensure_sync does without asgiref is not shown anywhere in the diff."}
+{"id": "blind-003", "label": false, "confidence": 0.9, "reason": "The arrow `(value) => encoder.call(this, value, encode)` only changes which this is passed; nothing in the diff makes a value get encoded twice."}
+{"id": "blind-004", "label": false, "confidence": 0.9, "reason": "The new guard is `if (!e || typeof e.loaded !== 'number')`; it never checks the total field."}
+{"id": "blind-005", "label": false, "confidence": 0.95, "reason": "After `onabort.call(signal);` the branch does `return;`, so no abort listener is added to an already aborted signal."}
+{"id": "blind-006", "label": true, "confidence": 0.9, "reason": "Line 49 `if (aborted) { return; }` runs before `signal.addEventListener('abort', onabort, ...)` at line 58, so later signals are skipped."}
+{"id": "blind-007", "label": false, "confidence": 0.9, "reason": "The get_host call at line 450 is inside `if request is not None:`, so it does not run when no request is given."}
+{"id": "blind-008", "label": false, "confidence": 0.95, "reason": "For '03', `String(Number(id)) === id` is `'3' === '03'`, false, so the function returns '03' unchanged."}
+{"id": "blind-009", "label": false, "confidence": 0.9, "reason": "Line 92 replaces the throw with `return;`, so the header is skipped, not stored under an empty key."}
+{"id": "blind-010", "label": false, "confidence": 0.9, "reason": "urlsplit gives sn_port 0 for :0, and `elif sn_port is not None: port = sn_port` sets port 0, not 5000."}
+{"id": "blind-011", "label": true, "confidence": 0.9, "reason": "Under `if self.url_map.host_matching:` line 450 sets `server_name = None`, and the comment says \"otherwise it's used and the actual host is ignored\"."}
+{"id": "blind-012", "label": true, "confidence": 0.85, "reason": "urlsplit(\"//host:0\").port is 0, and `elif sn_port is not None: port = sn_port` keeps 0 instead of falling to 5000."}
+{"id": "blind-013", "label": false, "confidence": 0.9, "reason": "The condition `!--streamsCount && !removed` skips the timer only when the session was already removed, not before removal."}
+{"id": "blind-014", "label": false, "confidence": 0.9, "reason": "An empty string is neither `value == null` nor `value === false`, so it becomes `[value]`, i.e. [''], not an empty array."}
+{"id": "blind-015", "label": true, "confidence": 0.7, "reason": "Line 481 changes `func()` to `self.ensure_sync(func)()`, and the typing change allows a processor returning `t.Awaitable[t.Dict[...]]`, so the awaited dict is what reaches context.update."}
+{"id": "blind-016", "label": false, "confidence": 0.9, "reason": "With a status code the loop is still `[code, None]`, which already visited None once; only when `code is None` does `[None]` replace two None passes."}
+{"id": "blind-017", "label": true, "confidence": 0.95, "reason": "Line 465 `bp_options[\"subdomain\"] = bp_subdomain + \".\" + state.subdomain` puts the child part, a dot, then the parent part."}
+{"id": "blind-018", "label": false, "confidence": 0.95, "reason": "Line 335 is `if first_bp_registration or first_name_registration:`, an or, not an and."}
+{"id": "blind-019", "label": false, "confidence": 0.9, "reason": "Line 55 does require `utils.hasOwnProp(ignoreDuplicateOf, key)`, but the contents of ignoreDuplicateOf are not in the diff."}
+{"id": "blind-020", "label": true, "confidence": 0.95, "reason": "Line 54 `onabort.call(signal);` is followed by `return;`, so `signal.addEventListener` is not reached for an already aborted signal."}
+{"id": "blind-021", "label": true, "confidence": 0.9, "reason": "Line 325 passes `first_bp_registration`, computed at line 320 as `not any(bp is self ...)` just before `app.blueprints[name] = self` at line 323."}
+{"id": "blind-022", "label": false, "confidence": 0.9, "reason": "urlsplit on \"//[::1]:8080\" gives hostname ::1 and port 8080, but what run_simple does with it is not in the diff."}
+{"id": "blind-023", "label": true, "confidence": 0.95, "reason": "Line 1051 checks `getattr(old_func, \"_flask_sync_wrapper\", False)` and line 1052 sets `old_func = old_func.__wrapped__` before `old_func != view_func`."}
+{"id": "blind-024", "label": false, "confidence": 0.95, "reason": "Line 106 still requires `len(sig.parameters) == 1`, so the fallback does not apply for any number of parameters."}
+{"id": "blind-025", "label": false, "confidence": 0.95, "reason": "Line 326 `keys.append(app.secret_key)` runs after `keys.extend(fallbacks)`, so the current key is last, not first."}
+{"id": "blind-026", "label": true, "confidence": 0.95, "reason": "Line 1279 `for c in [code, None] if code is not None else [None]:` loops over None once when code is None, where `[code, None]` gave None twice."}
+{"id": "blind-027", "label": true, "confidence": 0.9, "reason": "The old `cm = self._new_contexts.pop()` took from the end, last to first; the new `for cm in self._new_contexts:` goes in saved order."}
+{"id": "blind-028", "label": false, "confidence": 0.9, "reason": "In _load_arg_defaults the unconditional `kwargs.setdefault(\"cls\", cls)` was removed, leaving only `if cls not in {...}: kwargs.setdefault(...)`, so the load check does have effect."}
+{"id": "blind-029", "label": false, "confidence": 0.95, "reason": "The new condition is `len(args) == 1 and args[0] in self.get_help_option_names(ctx)`, so --help with other arguments does not match."}
+{"id": "blind-030", "label": true, "confidence": 0.95, "reason": "Line 854 `if (isSet(source))` builds `target = []` and pushes `visit(value)` only when `!isUndefined(reducedValue)`."}
+{"id": "blind-031", "label": false, "confidence": 0.9, "reason": "The early `return 0` at old line 167 is removed, but whether estimateDataURLBytes throws for a non string is not shown in the diff."}
+{"id": "blind-032", "label": false, "confidence": 0.9, "reason": "Line 15 `Math.max(0, ...)` clamps to 0, but nothing in the diff skips the listener for that event."}
+{"id": "blind-033", "label": true, "confidence": 0.85, "reason": "Line 342 `self._bg_loading_exc = None` runs before `raise exc`, so the next call reads None and `if exc is not None` is skipped."}
+{"id": "blind-034", "label": false, "confidence": 0.9, "reason": "Line 110 uses `session.once('goaway', removeSession)`, which handles only the first goaway, not each one."}
+{"id": "blind-035", "label": false, "confidence": 0.9, "reason": "For a 3xx status `Math.floor(response.status / 100) - 4` is -1, and indexing an array with -1 yields undefined in JavaScript, it does not throw."}
+{"id": "blind-036", "label": true, "confidence": 0.9, "reason": "Line 49 `(value) => encoder.call(this, value, encode)` uses the lexical this of toString, where the old `function (value)` had its own this."}
+{"id": "blind-037", "label": false, "confidence": 0.95, "reason": "Line 303 tests `entry === '*'`, an exact match, not an asterisk anywhere in the entry."}
+{"id": "blind-038", "label": true, "confidence": 0.95, "reason": "Line 168 changes `filter.call(this, value, header)` to `filter.call(context, value, header)`."}
+{"id": "blind-039", "label": true, "confidence": 0.85, "reason": "`_json_loads` returns raw on `json.JSONDecodeError` (line 14); \"hello\" is not valid JSON, so FLASK_NAME stays the string hello."}
+{"id": "blind-040", "label": false, "confidence": 0.9, "reason": "Lines 463 to 464 `elif bp_subdomain is not None: bp_options[\"subdomain\"] = bp_subdomain` use the child subdomain alone, not joined to the parent."}
+{"id": "blind-041", "label": true, "confidence": 0.9, "reason": "Line 450 `request.host = get_host(...)` runs under `if request is not None:`, after the comment \"Check trusted_hosts here until bind_to_environ does.\""}
+{"id": "blind-042", "label": false, "confidence": 0.95, "reason": "Line 21 tests `response.status < 500`, so 500 gets ERR_BAD_RESPONSE, not ERR_BAD_REQUEST."}
+{"id": "blind-043", "label": true, "confidence": 0.9, "reason": "Line 112 `if cls not in {JSONDecoder, _json.JSONDecoder}:` skips setdefault for the stdlib JSONDecoder, so cls is not added."}
+{"id": "blind-044", "label": true, "confidence": 0.95, "reason": "Line 96 `if (!--streamsCount && !removed)` starts no timer when removed is already true."}
+{"id": "blind-045", "label": false, "confidence": 0.9, "reason": "Line 216 now returns `_cv_request.get(None) is not None`, but nothing in the diff makes pushing a request context push an app context."}
+{"id": "blind-046", "label": false, "confidence": 0.9, "reason": "Line 246 `self._new_contexts.clear()` is shown, but how open fills the list is not in the diff."}
+{"id": "blind-047", "label": false, "confidence": 0.9, "reason": "Line 5 lowercases with `match[1].toLowerCase()`, but the http adapter is not in the diff."}
+{"id": "blind-048", "label": true, "confidence": 0.85, "reason": "Line 725 `urlsplit(f\"//{server_name}\")` parses the bracketed host to ::1 and port 8080, where `server_name.partition(\":\")` cut at the first colon."}
+{"id": "blind-049", "label": false, "confidence": 0.95, "reason": "`json.loads(\"5000\")` succeeds and returns the int 5000, so the `except json.JSONDecodeError` fallback does not run."}
+{"id": "blind-050", "label": true, "confidence": 0.95, "reason": "Line 21 `response.status >= 400 && response.status < 500 ? ERR_BAD_REQUEST : ERR_BAD_RESPONSE` covers 400 through 499."}
+{"id": "blind-051", "label": true, "confidence": 0.95, "reason": "Line 335 `if first_bp_registration or first_name_registration:` guards the merge into the parent."}
+{"id": "blind-052", "label": true, "confidence": 0.9, "reason": "Line 5 returns `match[1].toLowerCase()`, so HTTPS: yields https."}
+{"id": "blind-053", "label": true, "confidence": 0.9, "reason": "Line 110 adds `session.once('goaway', removeSession)` next to the existing close and error `once` listeners."}
+{"id": "blind-054", "label": false, "confidence": 0.9, "reason": "Only the request branch changes; outside a request `self.url_map.bind(self.config[\"SERVER_NAME\"], ...)` is untouched, so nothing shows url_for losing external URLs."}
+{"id": "blind-055", "label": true, "confidence": 0.95, "reason": "`String(Number('3')) === '3'` returns Number 3, while for '03' the check fails and `return id` keeps it."}
+{"id": "blind-056", "label": false, "confidence": 0.85, "reason": "Old line 342 `raise exc_info` raised a tuple, but nothing in the diff shows the server thread stopping or the reloader restarting."}
+{"id": "blind-057", "label": false, "confidence": 0.9, "reason": "Line 112 only excludes `inspect.Parameter.VAR_KEYWORD`; a *args parameter is VAR_POSITIONAL with an empty default, so it still gets script_info and the warning."}
+{"id": "blind-058", "label": true, "confidence": 0.95, "reason": "Line 303 `if (entry === '*') { return true; }` runs before `parseNoProxyEntry(entry)`."}
+{"id": "blind-059", "label": false, "confidence": 0.9, "reason": "The removed regex `/\\/?\\/$/` matches an optional slash plus a slash, so it stripped up to two, not at most one."}
+{"id": "blind-060", "label": false, "confidence": 0.9, "reason": "The body of onabort and any controller.abort call are not in the diff; line 49 only shows `if (aborted) return;`."}
+{"id": "blind-061", "label": false, "confidence": 0.85, "reason": "Line 342 clears `self._bg_loading_exc` before raising, but whether the loader runs again on the next request depends on __call__, not in the diff."}
+{"id": "blind-062", "label": false, "confidence": 0.9, "reason": "Line 783 sets `outer._flask_sync_wrapper = True`, but no code in the diff reuses it in run_async; its only reader is the app.py overwrite check."}
+{"id": "blind-063", "label": false, "confidence": 0.9, "reason": "Line 112 skips the stdlib decoder, but json.loads using a C scanner on PyPy is not shown in the diff."}
+{"id": "blind-064", "label": true, "confidence": 0.9, "reason": "Line 106 `if not args and len(sig.parameters) == 1:` still gates the fallback on no args and exactly one parameter."}
+{"id": "blind-065", "label": true, "confidence": 0.9, "reason": "Line 66 `parsed[key] = hasKey ? parsed[key] + ', ' + val : val` joins on own key presence, where the old truthiness test dropped an empty first value."}
+{"id": "blind-066", "label": true, "confidence": 0.95, "reason": "Line 447 `request.trusted_hosts = trusted_hosts` runs under the TRUSTED_HOSTS check, before `get_host(...)` at line 450."}
+{"id": "blind-067", "label": true, "confidence": 0.95, "reason": "Line 285 `const isSet = kindOfTest('Set');` sits right below `const isFileList = kindOfTest('FileList');`."}
+{"id": "blind-068", "label": true, "confidence": 0.9, "reason": "Line 112 `first_parameter.kind is not inspect.Parameter.VAR_KEYWORD` excludes a lone **kwargs, so neither the warning nor `args.append(script_info)` runs."}
+{"id": "blind-069", "label": true, "confidence": 0.8, "reason": "Line 688 `len(args) == 1 and args[0] in self.get_help_option_names(ctx)` joins the no args branch that does the early load."}
+{"id": "blind-070", "label": true, "confidence": 0.9, "reason": "Old line 180 `ctx.request.host.partition(\":\")[0]` on \"[::1]:5000\" yields \"[\", the text before the first colon."}
+{"id": "blind-071", "label": false, "confidence": 0.85, "reason": "Line 168 does use `filter.call(context, ...)`, but what has and delete pass as context is not in the diff."}
+{"id": "blind-072", "label": false, "confidence": 0.95, "reason": "Line 854 checks only `isSet(source)`; a Map is not handled by this branch."}
+{"id": "blind-073", "label": false, "confidence": 0.9, "reason": "Line 285 defines `const isSet = kindOfTest('Set')`, but no export of isSet appears in the diff."}
+{"id": "blind-074", "label": true, "confidence": 0.85, "reason": "Line 55 now uses `utils.hasOwnProp(ignoreDuplicateOf, key)` instead of `ignoreDuplicateOf[key]`, so inherited keys no longer trigger the drop."}
+{"id": "blind-075", "label": true, "confidence": 0.9, "reason": "Lines 461 to 464 set `state.subdomain` when `bp_subdomain is None`, and `bp_subdomain` itself when it is not None."}
+{"id": "blind-076", "label": true, "confidence": 0.95, "reason": "Line 326 `keys.append(app.secret_key)` comes after `keys.extend(fallbacks)`, so the current key is last."}
+{"id": "blind-077", "label": true, "confidence": 0.95, "reason": "Line 285 returns `[]` for `value == null` and `[value]` for a non array string."}
+{"id": "blind-078", "label": true, "confidence": 0.9, "reason": "Old line 23 `Math.floor(response.status / 100) - 4` is -1 for 3xx, and the two item array at index -1 is undefined."}
+{"id": "blind-079", "label": true, "confidence": 0.95, "reason": "Line 140 `if raw_key.startswith(prefix):` then `key = raw_key[len(prefix) :]` and `mapping[key] = loads(value)`."}
+{"id": "blind-080", "label": true, "confidence": 0.9, "reason": "The new while loop strips every trailing charCode 47, where the removed `/\\/?\\/$/` matched at most two slashes."}
+{"id": "blind-081", "label": true, "confidence": 0.95, "reason": "Line 10 `if (!e || typeof e.loaded !== 'number') { return; }` runs before the speedometer rate."}
+{"id": "blind-082", "label": true, "confidence": 0.9, "reason": "Line 216 now returns `_cv_request.get(None) is not None`, where it returned `_cv_app.get(None) is not None`."}
+{"id": "blind-083", "label": false, "confidence": 0.9, "reason": "The getattr on the view only runs `if provide_automatic_options is None:`, so an explicit argument to add_url_rule is not overridden."}
+{"id": "blind-084", "label": true, "confidence": 0.95, "reason": "Line 783 `outer._flask_sync_wrapper = True` sits right before `return outer`."}
+{"id": "blind-085", "label": false, "confidence": 0.95, "reason": "Line 140 uses `raw_key.startswith(prefix)`, not containment."}
+{"id": "blind-086", "label": false, "confidence": 0.95, "reason": "Reversed: the old `self._new_contexts.pop()` went last to first; the new `for cm in self._new_contexts:` goes in saved order."}
+{"id": "blind-087", "label": false, "confidence": 0.9, "reason": "Old line 180 took `host.partition(\":\")[0]`, but nothing in the diff says the cookie applied to subdomains."}
+{"id": "blind-088", "label": false, "confidence": 0.95, "reason": "Line 465 builds `bp_subdomain + \".\" + state.subdomain`, child first, not parent first."}
+{"id": "blind-089", "label": true, "confidence": 0.9, "reason": "Old line 167 `if (typeof url !== 'string' || url.slice(0, 5) !== 'data:') return 0;` is removed."}
+{"id": "blind-090", "label": false, "confidence": 0.95, "reason": "With an explicit False, line 641 `if provide_automatic_options:` is false, so OPTIONS is not added."}
+{"id": "blind-091", "label": false, "confidence": 0.95, "reason": "The set-cookie branch does `parsed[key].push(val)`, not a comma join; only line 66 joins with a comma."}
+{"id": "blind-092", "label": false, "confidence": 0.9, "reason": "Line 325 passes `first_bp_registration`, but how make_setup_state or the setup state uses it is not in the diff."}
+{"id": "blind-093", "label": true, "confidence": 0.9, "reason": "Line 246 `self._new_contexts.clear()` leaves the list empty, as `while self._new_contexts: ... pop()` did."}
+{"id": "blind-094", "label": true, "confidence": 0.95, "reason": "Line 15 wraps the value in `Math.max(0, ...)` before line 16 `progressBytes = Math.max(0, loaded - bytesNotified)`."}
+{"id": "blind-095", "label": true, "confidence": 0.85, "reason": "A view attribute False makes provide_automatic_options not None, so the config read at line 638 under `if provide_automatic_options is None:` is skipped."}
+{"id": "blind-096", "label": true, "confidence": 0.85, "reason": "Old code only added OPTIONS inside `if provide_automatic_options is None:`; new line 641 `if provide_automatic_options: required_methods.add(\"OPTIONS\")` covers an explicit True."}
+{"id": "blind-097", "label": true, "confidence": 0.95, "reason": "Line 92 replaces `throw new Error(...)` with `return;`, skipping the header quietly."}
+{"id": "blind-098", "label": false, "confidence": 0.9, "reason": "Line 1052 unwraps to `__wrapped__`, but `old_func != view_func` still raises for two different views."}
+{"id": "blind-099", "label": false, "confidence": 0.95, "reason": "Line 447 `request.trusted_hosts = trusted_hosts` runs before `get_host(...)` at line 450, not after."}
+{"id": "blind-100", "label": true, "confidence": 0.8, "reason": "Old line 342 `raise exc_info` raised the `sys.exc_info()` tuple, and Python raises TypeError for a non exception, hiding the real error."}
