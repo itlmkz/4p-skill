@@ -135,8 +135,30 @@ What the post-hoc cuts suggest, as hypotheses for the next eval:
 - **The semantic tier was too easy.** Every arm sits near AUROC 1.0 there. The
   next eval needs semantic findings that are harder to refute.
 
-Decision for the owner: wire a citation check plus a Jev claim check into
-`--collect` as an advisory flag on each finding, or run the harder eval first.
+The owner chose the harder eval first.
+
+### Evidence-check eval v2 (measured 2026-10-15)
+
+`PREREG-v2.md` turned the three v1 hypotheses into bars: state the citation rule
+in every prompt, test the split design directly, and use semantic pairs with no
+length shortcut. New repositories only. 232 items, $5.79.
+
+The v1 hypotheses held for the chat models and failed for Jev:
+
+- **Told the rule, Haiku and Opus apply it** (citation accuracy 0.96 and 0.98).
+  Jev does not (0.68). A rule that reads only the pointer scores 0.80.
+- **Jev checks literal claims well** (0.975 against Opus 0.987, H1 pass) but
+  trails Haiku on behavior claims (0.914 against 0.974).
+- **The split design does not reach Opus.** At R = 10 its decision cost is
+  0.349 against 0.246, and it rejected one true finding. That one came from Jev,
+  not from the script.
+- **The semantic tier is still at the ceiling for Opus** (0.9986), even with
+  near-miss pairs. Same-family authors and labelers remain the weak point.
+
+Decision, recorded: Jev is not the evidence checker for 4p. The coordinator
+already runs a strong model. If `--collect` gets a per-finding check, it is the
+coordinator, or one strong-model call, told the citation rule, at about $0.02
+per finding. Jev stays useful where every cent counts and claims are literal.
 
 ## Overlap with pi-jev, which is already installed
 
