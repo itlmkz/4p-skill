@@ -219,8 +219,9 @@ herdr agent read <name> --source recent-unwrapped --lines 200 \
   | python3 panel/report.py --extract -           # pull the block out of pane output
 ```
 
-`--extract` tolerates a pane that wraps its answer in prose. It finds the first
-json object that parses, so a chatty pane is an inconvenience, not a failure.
+`--extract` tolerates a pane that wraps its answer in prose. It takes the last
+json object that carries `"schema": "4p/report@1"`, so a self-check draft or a
+stray object in tool output never wins over the final answer.
 
 Useful fields when you merge:
 
