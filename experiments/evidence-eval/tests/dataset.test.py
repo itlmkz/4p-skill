@@ -3,7 +3,8 @@
 
     python3 tests/dataset.test.py
 
-Reads data/mechanical.jsonl and data/decoy.jsonl as built by build_dataset.py.
+Reads data/mechanical.jsonl and data/decoy.jsonl (v1) and data/v2/*.jsonl (v2,
+PREREG-v2.md) as built by build_dataset.py.
 Checks the schema, label balance, source spread, kind coverage, that no claim
 leaks its label, the diff cap, and that `build_dataset.py --check` catches a
 deliberately flipped label. No network: the build itself is not rerun here.
@@ -12,6 +13,7 @@ deliberately flipped label. No network: the build itself is not rerun here.
 from __future__ import annotations
 
 import collections
+import hashlib
 import json
 import os
 import re
@@ -162,6 +164,132 @@ with tempfile.TemporaryDirectory() as tmp:
     with open(path, "w", encoding="utf-8") as f:
         f.write(json.dumps(dict(it, kind="wrong_line")) + "\n")
     check("--check catches a mislabeled kind", run_check(path).returncode != 0, True)
+
+# --- v1 is frozen --------------------------------------------------------------
+
+V1_SHA1 = {
+    "mechanical.jsonl": "e9253b78b4bb06cf2adb31a359d0f49e92537c8c",
+    "decoy.jsonl": "77089d4782c16a9e04d57b28f307e20f90e48caa",
+}
+for name, want in V1_SHA1.items():
+    with open(os.path.join(DATA, name), "rb") as f:
+        check(f"v1 {name} is byte-identical to the merged run", hashlib.sha1(f.read()).hexdigest(), want)
+
+# --- v2 (PREREG-v2.md) -----------------------------------------------------------
+
+DATA_V2 = os.path.join(DATA, "v2")
+
+
+def load_v2(name: str) -> list[dict]:
+    with open(os.path.join(DATA_V2, name), encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+MECH2 = load_v2("mechanical.jsonl")
+DECOY2 = load_v2("decoy.jsonl")
+ALL2 = MECH2 + DECOY2
+
+check("v2 every item has the PREREG schema",
+      [it["id"] for it in ALL2 if list(it) != TOP or set(it["finding"]["evidence"]) != {"kind", "file", "line"}], [])
+check("v2 mechanical ids are mech2-0001.. in order", [it["id"] for it in MECH2],
+      [f"mech2-{n:04d}" for n in range(1, len(MECH2) + 1)])
+check("v2 decoy ids are decoy2-001.. in order", [it["id"] for it in DECOY2],
+      [f"decoy2-{n:03d}" for n in range(1, len(DECOY2) + 1)])
+check("v2 about 120 mechanical items", 100 <= len(MECH2) <= 140, True)
+check("v2 about 12 decoy items", 10 <= len(DECOY2) <= 16, True)
+share2 = sum(it["label"] for it in MECH2) / len(MECH2)
+print(f"      v2 mechanical true share {share2:.3f}")
+check("v2 mechanical label balance within 40% to 60% true", 0.40 <= share2 <= 0.60, True)
+
+sources2 = {(it["source"]["repo"], it["source"]["commit"]) for it in ALL2}
+print(f"      v2: {len(sources2)} distinct (repo, commit) sources")
+check("v2 at least 25 distinct (repo, commit) sources", len(sources2) >= 25, True)
+check("v2 uses only its two new repos", {r for r, _ in sources2}, {"encode/starlette", "sindresorhus/execa"})
+check("v2 reuses no v1 commit", sources2 & sources, set())
+
+kinds2 = collections.Counter(it["kind"] for it in MECH2)
+for kind, _ in bd.MECH_KINDS_V2:
+    check(f"v2 mechanical kind {kind} present at least 12 times ({kinds2[kind]})", kinds2[kind] >= 12, True)
+dkinds2 = collections.Counter(it["kind"] for it in DECOY2)
+check("v2 decoy kinds are empty_diff and truncated_evidence, 6 each", dict(dkinds2),
+      {"empty_diff": 6, "truncated_evidence": 6})
+check("v2 label follows kind",
+      [it["id"] for it in ALL2 if it["label"] != (it["kind"] in bd.TRUE_KINDS_V2)], [])
+check("v2 no claim contains true, false, label, wrong, fabricated, decoy",
+      [it["id"] for it in ALL2 if banned.search(it["finding"]["claim"])], [])
+check("v2 every diff at most 12000 chars", [it["id"] for it in ALL2 if len(it["diff"]) > 12000], [])
+
+
+def offset_of(it: dict) -> int | None:
+    """Distance from the cited line to the line that supports the claim, in the cited file."""
+    op, snip, _func, _file = bd.parse_claim(it["finding"]["claim"])
+    ev = it["finding"]["evidence"]
+    hits = [ln for ln in bd.all_lines(bd.parse_diff(it["diff"]))
+            if ln.op == op and snip in ln.text and ln.file == ev["file"]]
+    return abs(hits[0].no - ev["line"]) if len(hits) == 1 else None
+
+
+near = [offset_of(it) for it in MECH2 if it["kind"] == "near_line"]
+far = [offset_of(it) for it in MECH2 if it["kind"] == "wrong_line"]
+print(f"      v2 near_line offsets {sorted(near)}")
+print(f"      v2 wrong_line offsets {sorted(far)}")
+check("v2 near_line cited 1 to 5 lines off", all(o is not None and 1 <= o <= 5 for o in near), True)
+check("v2 near_line offsets cover 1..5", set(near), {1, 2, 3, 4, 5})
+check("v2 wrong_line cited 6 to 15 lines off", all(o is not None and 6 <= o <= 15 for o in far), True)
+check("v2 wrong_line has at least 4 items at offset >= 10", sum(o >= 10 for o in far) >= 4, True)
+check("v2 wrong_line offsets spread over at least 8 values", len(set(far)) >= 8, True)
+
+wf = [it for it in MECH2 if it["kind"] == "wrong_file"]
+lens = [bd.LENGTH_RE.search(it["rationale"]) for it in wf]
+check("v2 wrong_file records the cited file's length", all(lens), True)
+check("v2 wrong_file cited line <= cited file length",
+      [it["id"] for it, m in zip(wf, lens) if m and not 1 <= it["finding"]["evidence"]["line"] <= int(m.group(1))], [])
+inside = sum(f"b/{it['finding']['evidence']['file']}" in it["diff"] or f"a/{it['finding']['evidence']['file']}" in it["diff"]
+             for it in wf)
+print(f"      v2 wrong_file citing a file in the diff: {inside} of {len(wf)}")
+check("v2 wrong_file about half cite a file in the diff", 0.35 <= inside / len(wf) <= 0.65, True)
+
+
+def ends_mid_hunk(diff: str) -> bool:
+    hunks = bd.parse_diff(diff)
+    if not hunks:
+        return False
+    m = bd.HUNK_RE.match(diff[hunks[-1].offset:].splitlines()[0])
+    old_n = int(m.group(2)) if m.group(2) is not None else 1
+    new_n = int(m.group(4)) if m.group(4) is not None else 1
+    body = hunks[-1].lines
+    return sum(ln.op != "+" for ln in body) < old_n or sum(ln.op != "-" for ln in body) < new_n
+
+
+cuts = [it for it in DECOY2 if it["kind"] == "truncated_evidence"]
+mid = sum(ends_mid_hunk(it["diff"]) for it in cuts)
+print(f"      v2 truncated_evidence cut mid-hunk: {mid} of {len(cuts)}")
+check("v2 truncated_evidence cuts mid-hunk about half the time", 2 <= mid <= len(cuts) - 2, True)
+check("v2 truncated_evidence diffs are not empty", all(it["diff"] for it in cuts), True)
+
+res = run_check(os.path.join(DATA_V2, "mechanical.jsonl"), os.path.join(DATA_V2, "decoy.jsonl"))
+print("      " + res.stdout.strip().splitlines()[-1])
+check("v2 --check passes on the v2 files", res.returncode, 0)
+with tempfile.TemporaryDirectory() as tmp:
+    for kind in ("near_line", "wrong_line", "wrong_file"):
+        it = next(i for i in MECH2 if i["kind"] == kind)
+        path = os.path.join(tmp, f"{kind}.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(dict(it, label=not it["label"])) + "\n")
+        res = run_check(path)
+        check(f"v2 --check catches a flipped {kind} label", f"FAIL  {it['id']}:" in res.stdout, True)
+    # wrong_line pushed to 16 lines off breaks the v2 bound; near_line pushed to 6 breaks its kind.
+    for kind, dist in (("wrong_line", 16), ("near_line", 6)):
+        it = json.loads(json.dumps(next(i for i in MECH2 if i["kind"] == kind)))
+        op, snip, _f, _c = bd.parse_claim(it["finding"]["claim"])
+        hit = next(ln for ln in bd.all_lines(bd.parse_diff(it["diff"]))
+                   if ln.op == op and snip in ln.text and ln.file == it["finding"]["evidence"]["file"])
+        it["finding"]["evidence"]["line"] = hit.no + dist
+        path = os.path.join(tmp, f"{kind}-moved.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(it) + "\n")
+        check(f"v2 --check catches {kind} moved {dist} lines off", run_check(path).returncode != 0, True)
+
 
 # --- derive() on hand-made items ---------------------------------------------
 
