@@ -2,11 +2,14 @@
 """Writes the evidence-check eval report as Markdown and as one standalone HTML page.
 
 Reads items and per-arm predictions, scores them with metrics.py against the
-bars in PREREG.md, and writes report.md plus report.html. No network.
+bars in PREREG.md (or PREREG-v2.md with --prereg v2), and writes report.md plus
+report.html. No network.
 
     python3 report.py                                   # the three tier files, results/runs, results/
     python3 report.py --data data/mechanical.jsonl data/decoy.jsonl
     python3 report.py --data tests/fixtures/items.jsonl --runs tests/fixtures/runs --out /tmp/r
+    python3 report.py --prereg v2                       # data/v2, results/v2/runs, results/v2/
+    python3 report.py --prereg v2 --data tests/fixtures/v2/items.jsonl --runs tests/fixtures/v2/runs --out /tmp/r2
 
 Items:       data/{mechanical,decoy,semantic}.jsonl by default (the run_eval.py set), one item
              per line (see PREREG.md). Globs work in --data; *.raw.jsonl is always skipped.
@@ -97,22 +100,33 @@ def load_runs(runs_dir: str) -> tuple[dict[str, list[dict]], dict[str, int]]:
     return dict(sorted(runs.items(), key=lambda kv: arm_sort_key(kv[0]))), bad
 
 
+def prompt_mismatches(runs: dict[str, list[dict]], expected: str) -> dict[str, tuple[int, int]]:
+    """arm -> (lines with another prompt, all lines), for arms with any. A line without "prompt" is v1."""
+    out = {}
+    for arm, preds in runs.items():
+        bad = sum(1 for p in preds if (p.get("prompt") or "v1") != expected)
+        if bad:
+            out[arm] = (bad, len(preds))
+    return out
+
+
 def file_facts(path: str) -> dict:
     with open(path, "rb") as f:
         data = f.read()
     return {"path": path, "sha": hashlib.sha256(data).hexdigest()[:12], "lines": data.count(b"\n")}
 
 
-def known_threats() -> list[str]:
-    """The bullets under 'Known threats' in PREREG.md, each joined to one line."""
+def known_threats(path: str = PREREG) -> list[str]:
+    """The bullets under 'Known threats' in a preregistration, each joined to one line."""
+    name = os.path.basename(path)
     try:
-        with open(PREREG, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
-        return ["PREREG.md not found next to report.py."]
+        return [f"{name} not found next to report.py."]
     mt = re.search(r"^## Known threats[^\n]*\n(.*?)(?=^## )", text, re.S | re.M)
     if not mt:
-        return ["No 'Known threats' section found in PREREG.md."]
+        return [f"No 'Known threats' section found in {name}."]
     bullets: list[str] = []
     for line in mt.group(1).splitlines():
         if line.startswith("- "):
@@ -126,13 +140,20 @@ def known_threats() -> list[str]:
 
 
 def compute(items: list[dict], runs: dict[str, list[dict]]) -> dict:
-    """Every number the report shows, in one dict. Nothing here formats text."""
+    """Every number the v1 report shows, in one dict. Nothing here formats text."""
+    ctx = compute_base(items, runs, (m.CUT_ALL, m.CUT_MECH_DECOY))
+    ctx["hypotheses"] = m.evaluate_hypotheses(runs, items, ctx["summaries"])
+    ctx["cheapest"] = m.cheapest_passing_arm(runs, items, ctx["summaries"]) if ctx["arms"] else None
+    return ctx
+
+
+def compute_base(items: list[dict], runs: dict[str, list[dict]], cuts: Sequence[str]) -> dict:
+    """The tables both preregistrations share: per arm, tier, kind, decision cost, charts, errors."""
     arms = [a for a in runs if runs[a]]
     summaries: dict = {}
     for arm in arms:
-        for cut in (m.CUT_ALL, m.CUT_MECH_DECOY):
+        for cut in cuts:
             summaries[(arm, cut)] = m.arm_summary(items, runs[arm], cut)
-    hyps = m.evaluate_hypotheses(runs, items, summaries)
     ids = {it["id"] for it in items}
 
     per_tier, per_kind, costs, rocs, rel = {}, {}, {}, {}, {}
@@ -173,11 +194,10 @@ def compute(items: list[dict], runs: dict[str, list[dict]]) -> dict:
         errors += [{"arm": arm, "item_id": i, "error": "not answered"} for i in m.not_answered(items, runs[arm])]
     orphans = {arm: sum(1 for p in runs[arm] if p["item_id"] not in ids) for arm in arms}
     return {
-        "items": items, "runs": runs, "arms": arms, "summaries": summaries, "hypotheses": hyps,
+        "items": items, "runs": runs, "arms": arms, "summaries": summaries,
         "tiers": tiers, "kinds": kinds, "tier_meta": tier_meta, "kind_meta": kind_meta,
         "per_tier": per_tier, "per_kind": per_kind, "costs": costs, "rocs": rocs, "rel": rel,
         "decoys": decoys, "errors": errors, "orphans": orphans,
-        "cheapest": m.cheapest_passing_arm(runs, items, summaries) if arms else None,
     }
 
 
@@ -349,8 +369,9 @@ def cost_rows(ctx: dict) -> list[list[str]]:
     return rows
 
 
-def decoy_rows(ctx: dict) -> tuple[list[str], list[list[str]]]:
-    head = ["Item", "Kind", "Label"] + list(ctx["arms"]) + ["H5 (jev)"]
+def decoy_rows(ctx: dict, h5: bool = True) -> tuple[list[str], list[list[str]]]:
+    """p per arm on every decoy item. v1 adds its H5 column (jev p <= 0.2 on empty_diff)."""
+    head = ["Item", "Kind", "Label"] + list(ctx["arms"]) + (["H5 (jev)"] if h5 else [])
     by = {a: m.index_preds(ctx["runs"][a]) for a in ctx["arms"]}
     rows = []
     for it in ctx["decoys"]:
@@ -358,7 +379,9 @@ def decoy_rows(ctx: dict) -> tuple[list[str], list[list[str]]]:
         for a in ctx["arms"]:
             p = by[a].get(it["id"])
             cells.append("not answered (0.50)" if p is None else "error (0.50)" if m.is_error(p) else f"{m.effective_p(p):.2f}")
-        if it.get("kind") != "empty_diff":
+        if not h5:
+            pass
+        elif it.get("kind") != "empty_diff":
             cells.append("n/a")
         elif "jev" not in by:
             cells.append(m.NOT_RUN)
@@ -513,10 +536,16 @@ p code, li code { background: var(--code-bg); padding: 0 4px; border-radius: 4px
 """
 
 
-def arm_color(arm: str, arms: list[str]) -> str:
-    # The slot follows the arm's place in ARM_ORDER, never its rank, so colors stay put across runs.
-    slot = ARM_ORDER.index(arm) if arm in ARM_ORDER else len(ARM_ORDER) + sorted(a for a in arms if a not in ARM_ORDER).index(arm)
-    return f"var(--s{slot % 6 + 1})"
+def arm_color(arm: str, arms: list[str], order: Optional[list[str]] = None, slots: int = 6) -> str:
+    # The slot follows the arm's place in the order list, never its rank, so colors stay put across runs.
+    order = ARM_ORDER if order is None else order
+    slot = order.index(arm) if arm in order else len(order) + sorted(a for a in arms if a not in order).index(arm)
+    return f"var(--s{slot % slots + 1})"
+
+
+def ctx_color(ctx: dict, arm: str) -> str:
+    """v1 keeps its six-slot palette; v2 sets arm_order and eight slots in its context."""
+    return arm_color(arm, ctx["arms"], ctx.get("arm_order"), ctx.get("color_slots", 6))
 
 
 def badge(status: str) -> str:
@@ -571,7 +600,7 @@ def svg_roc(ctx: dict) -> str:
     for arm in ctx["arms"]:
         pts = ctx["rocs"].get(arm)
         s = ctx["summaries"][(arm, m.CUT_ALL)]
-        color = arm_color(arm, ctx["arms"])
+        color = ctx_color(ctx, arm)
         dash = arm == "accept_all"
         legend.append(f'<li><span class="sw{" dash" if dash else ""}" style="background:{color};color:{color}"></span>'
                       f'{E(arm)} <span class="note">AUROC {E(_f(s["auroc"], 3))}</span></li>')
@@ -589,7 +618,7 @@ def svg_roc(ctx: dict) -> str:
 def svg_reliability(ctx: dict, arm: str) -> str:
     x0, y0, w, h = 44, 10, 200, 200
     table = ctx["rel"].get(arm) or []
-    color = arm_color(arm, ctx["arms"])
+    color = ctx_color(ctx, arm)
     parts = [f'<svg viewBox="0 0 256 254" role="img" aria-label="Reliability diagram for {E(arm)}">',
              svg_axes(x0, y0, w, h, "Mean p in bin", "Share supported")]
     for r in table:
@@ -680,23 +709,363 @@ def render_html(ctx: dict, meta: dict) -> str:
             f"<style>{CSS}</style>\n</head>\n<body>\n<main>\n" + "\n".join(B) + "\n</main>\n</body>\n</html>\n")
 
 
+# --- v2 (PREREG-v2.md) -------------------------------------------------------------------
+# v1 above renders exactly as before. v2 adds manipulation checks, the claim-truth and
+# citation cuts, commit-level intervals, derived split arms and semantic pair wins.
+
+PREREG_V2 = os.path.join(HERE, "PREREG-v2.md")
+V2_DEFAULT_DATA = [os.path.join(HERE, "data", "v2", f"{t}.jsonl") for t in ("mechanical", "decoy", "semantic")]
+V2_DEFAULT_RUNS = os.path.join(HERE, "results", "v2", "runs")
+V2_DEFAULT_OUT = os.path.join(HERE, "results", "v2")
+
+V2_CHANGES = [
+    "New data: no v1 item, commit or repository is reused.",
+    "Prompt v2: every model arm is told the citation rule, word for word.",
+    "New arms: cite_script (a deterministic citation check) and the derived split arms cite_jev and cite_haiku.",
+    "New cuts: claim-truth and citation, next to all items. The v1 mechanical + decoy cut is gone.",
+    "Commit-level bootstrap is the primary interval, because items share diffs. Item intervals are still shown.",
+    "Manipulation checks M1 and M2 decide if the semantic tier counts in H1 and H2.",
+    "New bars H1 to H6. v1 H1 to H5 do not carry over; read each v2 bar on its own cut.",
+    "The semantic tier comes in true and false pairs, so the report adds a pair-level win rate.",
+]
+
+CSS_V2_EXTRA = """
+:root { --s7: #6250d6; --s8: #e34948; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --s7: #9085e9; --s8: #e66767; } }
+:root[data-theme="dark"] { --s7: #9085e9; --s8: #e66767; }
+ul.changes li { margin: 4px 0; max-width: 80ch; }
+"""
+
+
+def compute_v2(items: list[dict], file_runs: dict[str, list[dict]]) -> dict:
+    """Every number the v2 report shows. Derived arms are built here from the file arms."""
+    runs = m.v2_runs(file_runs, items)
+    ctx = compute_base(items, runs, (m.CUT_ALL,))
+    ctx["arm_order"], ctx["color_slots"] = m.V2_ARM_ORDER, 8
+    ctx["file_arms"] = [a for a in file_runs if file_runs[a]]
+    v2 = m.evaluate_v2(items, runs)
+    ctx.update(checks=v2["checks"], hypotheses=v2["hypotheses"], semantic_used=v2["semantic_used"])
+    ctx["cuts"] = {(a, c): m.v2_cut_summary(items, runs[a], c, semantic=(c != m.V2_CUT_CLAIM or v2["semantic_used"]))
+                   for a in ctx["arms"] for c in m.V2_CUTS}
+    pairs, bad = m.semantic_pairs(items)
+    ctx["pairs"], ctx["bad_pairs"] = pairs, bad
+    ctx["pair_rows"] = {a: m.pair_summary(pairs, runs[a]) for a in ctx["arms"]} if pairs else {}
+    return ctx
+
+
+def _v2_sentence(row: dict) -> list[str]:
+    out = _v2_sentence_body(row)
+    note = row["nums"].get("coverage")
+    if note and row["status"] != m.NOT_RUN:  # a small gap (10% or less) is named right after the bar
+        out.insert(1, f"This bar reads partial answers ({note}).")
+    return out
+
+
+def _v2_sentence_body(row: dict) -> list[str]:
+    st, n, hid = row["status"], row["nums"], row["id"]
+    if st == m.NOT_RUN:
+        return [f"{hid} did not run: {row['value']}."]
+    word = "passes" if st == m.PASS else "fails"
+    if hid == "M1":
+        side = "at or below" if st == m.PASS else "above"
+        return [f"M1 {word}. Opus AUROC on the semantic tier is {n['auroc']:.4f}, {side} the 0.95 ceiling."]
+    if hid == "M2":
+        side = "inside" if st == m.PASS else "outside"
+        return [f"M2 {word}. Claim length predicts the semantic label at AUROC {n['auroc']:.4f}, {side} 0.35 to 0.65."]
+    if hid == "H1":
+        out = [f"H1 {word}. Jev AUROC on claim truth is {n['auroc']:.3f}, and Jev minus Opus is {n['gap']:+.3f}."]
+        return out + ([] if st == m.PASS else ["The bar is 0.90 and -0.05."])
+    if hid == "H2":
+        if st == m.PASS:
+            return [f"H2 passes. Jev beats Haiku by {n['diff']:+.3f} AUROC, and the commit interval excludes 0."]
+        if n["diff"] <= 0:
+            return [f"H2 fails. Jev does not beat Haiku. The AUROC difference is {n['diff']:+.3f}."]
+        return [f"H2 fails. Jev leads Haiku by {n['diff']:+.3f} AUROC, but the commit interval includes 0."]
+    if hid == "H3":
+        side = "at or above" if st == m.PASS else "below"
+        return [f"H3 {word}. Jev accuracy on the citation cut is {n['acc']:.2f}, {side} the 0.70 bar."]
+    if hid == "H4":
+        out = [f"H4 {word}. At R = 10 the split design has decision cost {n['dc']:.3f}, against {n['dc_opus']:.3f} for Opus."]
+        ratio = n["ratio"]
+        out.append(f"cite_jev costs {ratio[len('cost ratio '):]} of opus per item." if ratio.startswith("cost ratio ")
+                   else f"cite_jev costs {ratio} per item.")
+        if not n["dc_ok"]:
+            out.append("Its decision cost is more than 0.05 above Opus.")
+        if not n["cost_ok"]:
+            out.append("Its price is above the 1/20 bar.")
+        return out
+    if hid == "H5":
+        if st == m.PASS:
+            return [f"H5 passes. The split design rejects {n['n_reject']} findings at R = 10, and none is true."]
+        return [f"H5 fails. The split design rejects {n['true_rejected']} true findings at R = 10."]
+    if hid == "H6":
+        side = "inside" if st == m.PASS else "above"
+        return [f"H6 {word}. Jev calibration error on all items is {n['ece']:.4f}, {side} the 0.10 bar."]
+    return [f"{hid} {word}."]
+
+
+def semantic_sentences(ctx: dict) -> list[str]:
+    """Why H1 and H2 do or do not read the semantic tier. "Known defect" only when a check fails."""
+    if ctx["semantic_used"]:
+        return ["Both checks pass, so H1 and H2 include the semantic tier."]
+    if any(c["status"] == m.FAIL for c in ctx["checks"]):
+        return ["The semantic tier is a known defect here.", "H1 and H2 use the mechanical claim-truth kinds alone."]
+    names = " and ".join(c["id"] for c in ctx["checks"] if c["status"] == m.NOT_RUN)
+    return [f"{names} did not run, so the semantic tier is not read.",
+            "H1 and H2 use the mechanical claim-truth kinds alone."]
+
+
+def semantic_note(ctx: dict) -> str:
+    return "Semantic tier used in H1 and H2: " + ("yes. " if ctx["semantic_used"] else "no. ") + " ".join(semantic_sentences(ctx))
+
+
+def reading_v2(ctx: dict) -> list[str]:
+    """The v2 verdict paragraph, generated from the numbers. STE100, 20 words or fewer per sentence."""
+    n_items, n_arms = len(ctx["items"]), len(ctx["arms"])
+    out = [f"This report scores {n_arms} arm{'' if n_arms == 1 else 's'} on {n_items} finding{'' if n_items == 1 else 's'}.",
+           "It follows PREREG-v2.md. Intervals resample whole commits."]
+    if not n_arms:
+        out.append("No arm has results yet, so every bar shows NOT RUN.")
+        return out
+    for arm in ctx["file_arms"]:
+        k = ctx["summaries"][(arm, m.CUT_ALL)]["not_answered"]
+        if k:
+            out.append(f"{arm} did not answer {k} of {n_items} items. Each one counts as p = 0.5.")
+    for row in ctx["checks"]:
+        out += _v2_sentence(row)
+    out += semantic_sentences(ctx)
+    for row in ctx["hypotheses"]:
+        out += _v2_sentence(row)
+    by = {}
+    for row in ctx["hypotheses"]:
+        by.setdefault(row["status"], []).append(row["id"])
+    if len(by.get(m.PASS, [])) == len(ctx["hypotheses"]):
+        out.append("All six bars pass.")
+    else:
+        if by.get(m.FAIL):
+            out.append(f"Failed bars: {', '.join(by[m.FAIL])}. Read those rows before any product work.")
+        if by.get(m.NOT_RUN):
+            out.append(f"Bars that did not run: {', '.join(by[m.NOT_RUN])}. They give no evidence either way.")
+    return out
+
+
+V2_ARM_HEAD = ["Arm", "n", "Not answered", "AUROC [commit CI], all", "Item CI", "Brier", "ECE",
+               "Cost per item", "Total cost", "p50 latency", "Errors"]
+V2_CUT_HEAD = ["Arm", "Cut", "n", "AUROC", "Commit CI", "Item CI", "Accuracy"]
+V2_PAIR_HEAD = ["Arm", "Pairs", "True twin higher", "Commit CI"]
+
+
+def _ci(ci: Optional[tuple[float, float]]) -> str:
+    return NA if ci is None else f"[{ci[0]:.3f}, {ci[1]:.3f}]"
+
+
+def v2_arm_rows(ctx: dict) -> list[list[str]]:
+    rows = []
+    for arm in ctx["arms"]:
+        s, c = ctx["summaries"][(arm, m.CUT_ALL)], ctx["cuts"][(arm, m.CUT_ALL)]
+        derived = arm in m.V2_DERIVED
+        # A derived arm answered exactly what its model arm answered: show those counts.
+        counted = ctx["summaries"][(m.V2_DERIVED[arm], m.CUT_ALL)] if derived else s
+        # A derived arm makes exactly its model arm's calls, so it shows the model arm's total.
+        total = ctx["summaries"][(m.V2_DERIVED[arm], m.CUT_ALL)]["cost_total"] if derived else s["cost_total"]
+        rows.append([arm, str(counted["n"]), str(counted["not_answered"]), fmt_ci(c["auroc"], c["ci_commit"]), _ci(c["ci_item"]),
+                     _f(s["brier"], 3), _f(s["ece"], 3), fmt_usd(s["cost_per_item"]), fmt_usd(total),
+                     fmt_s(s["latency_p50"]), "see model arm" if derived else str(s["errors"])])
+    return rows
+
+
+def v2_cut_rows(ctx: dict) -> list[list[str]]:
+    rows = []
+    claim_name = m.V2_CUT_NAMES[m.V2_CUT_CLAIM] + ("" if ctx["semantic_used"] else " (mechanical only)")
+    for arm in ctx["arms"]:
+        for cut in m.V2_CUTS:
+            c = ctx["cuts"][(arm, cut)]
+            name = claim_name if cut == m.V2_CUT_CLAIM else m.V2_CUT_NAMES[cut]
+            rows.append([arm, name, str(c["n"]), _f(c["auroc"], 3), _ci(c["ci_commit"]), _ci(c["ci_item"]), _f(c["acc"])])
+    return rows
+
+
+def v2_pair_rows(ctx: dict) -> list[list[str]]:
+    return [[a, str(r["n"]), _f(r["rate"], 3), _ci(r["ci"])] for a, r in ctx["pair_rows"].items()]
+
+
+def v2_check_rows(ctx: dict, rows: list[dict]) -> list[list[str]]:
+    return [[r["id"], r["hypothesis"], r["cut"], r["bar"], f"{r['status']}: {r['value']}"] for r in rows]
+
+
+def commands_v2(ctx: dict) -> list[str]:
+    report_cmd = "python3 report.py " + " ".join(shlex.quote(a) for a in sys.argv[1:])
+    return [
+        "cd experiments/evidence-eval",
+        "python3 build_dataset.py --check    # re-derive the mechanical labels",
+        "python3 run_eval.py --prompt v2 --pilot    # v2 data, arms, $10 cap and results/v2/runs are the v2 defaults",
+        "python3 run_eval.py --prompt v2",
+        report_cmd.strip(),
+        "python3 tests/metrics.test.py       # pins every metric to a hand-computed value",
+    ]
+
+
+V2_PAIR_NOTE = ("Each semantic pair holds one true claim and one false twin on the same evidence. "
+                "The share counts pairs where the arm gives the true twin the higher p. Ties count half. "
+                "Unanswered items count as p = 0.5.")
+V2_COST_NOTE = ("n is the number answered. Errors and unanswered items count as p = 0.5. Derived arms take the "
+                "model arm's p when cite_script passes, else 0.02, and cost what the model arm costs.")
+
+
+def render_md_v2(ctx: dict, meta: dict) -> str:
+    L: list[str] = ["# Evidence Check Eval v2", ""]
+    L.append(f"Generated {meta['when']}. {len(ctx['items'])} items, arms: {', '.join(ctx['arms']) or 'none'}. "
+             "Preregistration: PREREG-v2.md.")
+    head = ["ID", "Check", "Cut", "Pass when", "Result"]
+    L += ["", "## Manipulation checks", "", md_table(head, v2_check_rows(ctx, ctx["checks"])), ""]
+    L.append(semantic_note(ctx))
+    L += ["", "## Verdict", "", " ".join(reading_v2(ctx)), ""]
+    L.append(md_table(["ID", "Hypothesis", "Cut", "Pass when", "Result"], v2_check_rows(ctx, ctx["hypotheses"])))
+    L += ["", "## Per-arm results", "", md_table(V2_ARM_HEAD, v2_arm_rows(ctx)), "", V2_COST_NOTE]
+    if any(ctx["orphans"].values()):
+        L.append("Predictions for unknown item ids (ignored): " + ", ".join(f"{a} {n}" for a, n in ctx["orphans"].items() if n) + ".")
+    L += ["", "## Per cut", "", "claim-truth: mechanical true_added, true_removed, negated, fabricated, plus the semantic tier. "
+          "citation: mechanical near_line, wrong_line, wrong_file. Accuracy reads p >= 0.5 as supported.", "",
+          md_table(V2_CUT_HEAD, v2_cut_rows(ctx)), ""]
+    L += ["## Semantic pairs", "", V2_PAIR_NOTE, ""]
+    L.append(md_table(V2_PAIR_HEAD, v2_pair_rows(ctx)) if ctx["pair_rows"] else "No well-formed semantic pairs in the data.")
+    if ctx["bad_pairs"]:
+        L += ["", "Malformed pairs (skipped): " + ", ".join(ctx["bad_pairs"]) + "."]
+    h, rows = tier_rows(ctx)
+    L += ["", "## Per tier", "", md_table(h, rows), ""]
+    h, rows = kind_rows(ctx)
+    L += ["## Per kind", "", "Most kinds hold one label only, so AUROC is not computable there. "
+          "Accuracy reads p >= 0.5 as supported.", "", md_table(h, rows), ""]
+    L += ["## Decision cost", "", "Reject when p < t = 1 / (1 + R). Rejecting a true finding costs R; "
+          "accepting a false finding costs 1. Precision and recall are of reject. H4 and H5 read R = 10.", "",
+          md_table(COST_HEAD, cost_rows(ctx)), ""]
+    h, rows = decoy_rows(ctx, h5=False)
+    L += ["## Decoy behavior", "", md_table(h, rows) if rows else "No decoy items in the data.", ""]
+    L += ["## Errors", ""]
+    if ctx["errors"]:
+        L.append(md_table(["Arm", "Item", "Error"], [[e["arm"], e["item_id"], e["error"]] for e in ctx["errors"]]))
+    else:
+        L.append("No errors.")
+    L += ["", "## What changed from v1", ""] + [f"- {c}" for c in V2_CHANGES]
+    L += ["", "## Known threats (from PREREG-v2.md)", ""] + [f"- {t}" for t in known_threats(PREREG_V2)]
+    L += ["", "## Reproduce", "", "```sh"] + commands_v2(ctx) + ["```", ""]
+    L += ["Inputs:", ""] + [f"- `{f['path']}` sha256 {f['sha']}, {f['lines']} lines" for f in meta["files"]]
+    return "\n".join(L) + "\n"
+
+
+def _h_rows_table(rows: list[dict]) -> str:
+    out = []
+    for r in rows:
+        out.append("<tr>" + f"<td>{E(r['id'])}</td>"
+                   + f"<td>{E(r['hypothesis'])}<span class=\"val\">Pass when: {E(r['bar'])}</span></td>"
+                   + f"<td>{E(r['cut'])}</td>"
+                   + f'<td>{badge(r["status"])}<span class="val">{E(r["value"])}</span></td></tr>')
+    head = "".join(f'<th scope="col">{h}</th>' for h in ("ID", "Hypothesis", "Cut", "Result"))
+    return (f'<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table class="verdict">'
+            f'<thead><tr>{head}</tr></thead><tbody>{"".join(out)}</tbody></table></div>')
+
+
+def render_html_v2(ctx: dict, meta: dict) -> str:
+    B: list[str] = ["<h1>Evidence Check Eval v2</h1>"]
+    B.append(f'<p class="meta">Generated {E(meta["when"])}. {len(ctx["items"])} items. '
+             f'Arms: {E(", ".join(ctx["arms"]) or "none")}. Preregistration: PREREG-v2.md.</p>')
+
+    B.append('<h2 id="checks">Manipulation checks</h2>')
+    B.append(_h_rows_table(ctx["checks"]))
+    B.append(f'<p class="note">{E(semantic_note(ctx))}</p>')
+
+    B.append('<h2 id="verdict">Verdict</h2>')
+    B.append(f'<p class="reading">{E(" ".join(reading_v2(ctx)))}</p>')
+    B.append(_h_rows_table(ctx["hypotheses"]))
+
+    B.append('<h2 id="arms">Per-arm results</h2>')
+    B.append(h_table(V2_ARM_HEAD, v2_arm_rows(ctx)))
+    B.append(f'<p class="note">{E(V2_COST_NOTE)}</p>')
+    if any(ctx["orphans"].values()):
+        B.append('<p class="note">Predictions for unknown item ids (ignored): '
+                 + E(", ".join(f"{a} {n}" for a, n in ctx["orphans"].items() if n)) + ".</p>")
+    if ctx["arms"]:
+        B.append(svg_roc(ctx))
+        B.append("<h3 style=\"margin-top:16px\">Reliability, all items</h3>")
+        B.append('<p class="note">Bars show the share of supported findings per p bin. Dots sit at the mean p of the bin. '
+                 "A calibrated arm keeps its dots on the dashed line.</p>")
+        B.append('<div class="charts">' + "".join(svg_reliability(ctx, a) for a in ctx["arms"]) + "</div>")
+
+    B.append('<h2 id="cuts">Per cut</h2>')
+    B.append('<p class="note">claim-truth: mechanical true_added, true_removed, negated, fabricated, plus the semantic tier. '
+             "citation: mechanical near_line, wrong_line, wrong_file. Accuracy reads p &gt;= 0.5 as supported.</p>")
+    B.append(h_table(V2_CUT_HEAD, v2_cut_rows(ctx), num_from=1))
+
+    B.append('<h2 id="pairs">Semantic pairs</h2>')
+    B.append(f'<p class="note">{E(V2_PAIR_NOTE)}</p>')
+    B.append(h_table(V2_PAIR_HEAD, v2_pair_rows(ctx)) if ctx["pair_rows"] else "<p>No well-formed semantic pairs in the data.</p>")
+    if ctx["bad_pairs"]:
+        B.append(f'<p class="note">Malformed pairs (skipped): {E(", ".join(ctx["bad_pairs"]))}.</p>')
+
+    B.append('<h2 id="tiers">Per tier</h2>')
+    h, rows = tier_rows(ctx)
+    B.append(h_table(h, rows))
+    B.append('<h2 id="kinds">Per kind</h2>')
+    B.append('<p class="note">Most kinds hold one label only, so AUROC is not computable there. Accuracy reads p &gt;= 0.5 as supported.</p>')
+    h, rows = kind_rows(ctx)
+    B.append(h_table(h, rows, num_from=2))
+
+    B.append('<h2 id="cost">Decision cost</h2>')
+    B.append('<p class="note">Reject when p &lt; t = 1 / (1 + R). Rejecting a true finding costs R; accepting a false finding costs 1. '
+             "Precision and recall are of reject. H4 and H5 read R = 10.</p>")
+    B.append(h_table(COST_HEAD, cost_rows(ctx)))
+
+    B.append('<h2 id="decoys">Decoy behavior</h2>')
+    h, rows = decoy_rows(ctx, h5=False)
+    B.append(h_table(h, rows, num_from=3) if rows else "<p>No decoy items in the data.</p>")
+
+    B.append('<h2 id="errors">Errors</h2>')
+    if ctx["errors"]:
+        B.append(h_table(["Arm", "Item", "Error"], [[e["arm"], e["item_id"], e["error"]] for e in ctx["errors"]], num_from=99))
+    else:
+        B.append("<p>No errors.</p>")
+
+    B.append('<h2 id="changes">What changed from v1</h2>')
+    B.append('<ul class="changes">' + "".join(f"<li>{inline_md(c)}</li>" for c in V2_CHANGES) + "</ul>")
+    B.append('<h2 id="threats">Known threats (from PREREG-v2.md)</h2>')
+    B.append('<ul class="threats">' + "".join(f"<li>{inline_md(t)}</li>" for t in known_threats(PREREG_V2)) + "</ul>")
+
+    B.append('<h2 id="reproduce">Reproduce</h2>')
+    B.append('<pre tabindex="0" aria-label="Commands, scrolls sideways"><code>' + E("\n".join(commands_v2(ctx))) + "</code></pre>")
+    B.append('<ul class="threats">' + "".join(
+        f"<li><code>{E(f['path'])}</code> sha256 {E(f['sha'])}, {f['lines']} lines</li>" for f in meta["files"]) + "</ul>")
+
+    return ("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+            "<title>Evidence Check Eval v2</title>\n"
+            f"<style>{CSS}{CSS_V2_EXTRA}</style>\n</head>\n<body>\n<main>\n" + "\n".join(B) + "\n</main>\n</body>\n</html>\n")
+
+
 # --- main ---------------------------------------------------------------------------------
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Write report.md and report.html for the evidence-check eval.")
+    ap.add_argument("--prereg", choices=("v1", "v2"), default="v1",
+                    help="which preregistration to report against (default v1, PREREG.md; v2 is PREREG-v2.md)")
     ap.add_argument("--data", nargs="+", default=None,
-                    help="item files or globs (default data/mechanical, decoy and semantic .jsonl; *.raw.jsonl is skipped)")
-    ap.add_argument("--runs", default=os.path.join(HERE, "results", "runs"), help="directory of <arm>.jsonl files")
-    ap.add_argument("--out", default=os.path.join(HERE, "results"), help="directory for report.md and report.html")
+                    help="item files or globs (default data/ or data/v2/ mechanical, decoy and semantic .jsonl; *.raw.jsonl is skipped)")
+    ap.add_argument("--runs", default=None, help="directory of <arm>.jsonl files (default results/runs or results/v2/runs)")
+    ap.add_argument("--out", default=None, help="directory for report.md and report.html (default results or results/v2)")
     args = ap.parse_args(argv)
+    v2 = args.prereg == "v2"
+    default_data = V2_DEFAULT_DATA if v2 else DEFAULT_DATA
+    if args.runs is None:
+        args.runs = V2_DEFAULT_RUNS if v2 else os.path.join(HERE, "results", "runs")
+    if args.out is None:
+        args.out = V2_DEFAULT_OUT if v2 else os.path.join(HERE, "results")
 
     if args.data is None:  # default set: a tier file that does not exist yet is skipped, with a note
-        paths = [p for p in DEFAULT_DATA if os.path.isfile(p)]
-        for p in DEFAULT_DATA:
+        paths = [p for p in default_data if os.path.isfile(p)]
+        for p in default_data:
             if p not in paths:
                 print(f"report.py: {os.path.relpath(p, HERE)} not found, skipped", file=sys.stderr)
-        missing = [] if paths else DEFAULT_DATA
+        missing = [] if paths else default_data
     else:
         paths = expand_data(args.data)
         missing = [p for p in paths if not os.path.isfile(p)] or ([] if paths else list(args.data))
@@ -708,8 +1077,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for arm, n in bad.items():
         if n:
             print(f"report.py: skipped {n} unreadable lines in {arm}.jsonl", file=sys.stderr)
+    mixed = prompt_mismatches(runs, args.prereg)
+    if mixed:  # a v1 line scored against v2 bars (or the reverse) would be a silent deviation
+        print(f"report.py: --prereg {args.prereg} scores only prompt {args.prereg} lines (a line without a prompt is v1). "
+              f"Refusing {args.runs}:", file=sys.stderr)
+        for arm, (k, n) in mixed.items():
+            print(f"  {arm}: {k} of {n} lines have another prompt", file=sys.stderr)
+        return 2
 
-    ctx = compute(items, runs)
+    ctx = compute_v2(items, runs) if v2 else compute(items, runs)
     run_files = [os.path.join(args.runs, f"{a}.jsonl") for a in runs]
     meta = {
         "when": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
@@ -719,11 +1095,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     os.makedirs(args.out, exist_ok=True)
     md_path, html_path = os.path.join(args.out, "report.md"), os.path.join(args.out, "report.html")
     with open(md_path, "w", encoding="utf-8") as f:
-        f.write(render_md(ctx, meta))
+        f.write(render_md_v2(ctx, meta) if v2 else render_md(ctx, meta))
     with open(html_path, "w", encoding="utf-8") as f:
-        f.write(render_html(ctx, meta))
+        f.write(render_html_v2(ctx, meta) if v2 else render_html(ctx, meta))
     print(f"wrote {md_path}")
     print(f"wrote {html_path}")
+    if v2:
+        for r in ctx["checks"] + ctx["hypotheses"]:
+            print(f"  {r['id']}  {r['status']:<8} {r['value']}")
+        return 0
     for r in ctx["hypotheses"]:
         print(f"  {r['id']}  {r['decided']:<8} {r[m.CUT_MECH_DECOY]['value'] if r[m.CUT_MECH_DECOY]['status'] != m.NOT_RUN else r[m.CUT_ALL]['value']}")
     return 0
