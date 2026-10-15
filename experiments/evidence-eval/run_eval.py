@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """Run the evidence-check arms over the eval items.
 
-Stdlib only. Enforces the stop rules in PREREG.md: cache and resume, the budget
-cap, the pilot gate, and the per-arm error-rate stop.
+Stdlib only. Enforces the stop rules in PREREG.md and PREREG-v2.md: cache and
+resume, the budget cap, the pilot gate, and the per-arm error-rate stop.
 
     python3 run_eval.py --data data/fixture.jsonl --dry-run     # fake arm, no network
     python3 run_eval.py --pilot                                 # 1 item per tier, then a spend table
     python3 run_eval.py --arms jev,haiku --limit 5
     python3 run_eval.py --chat-transport openrouter              # haiku and opus over OpenRouter
-    python3 run_eval.py                                         # the full run, all four arms
+    python3 run_eval.py                                         # the full v1 run, all four arms
+    python3 run_eval.py --prompt v2                             # the v2 run: v2 data, arms, cap and out
 
 Results: <out>/<arm>.jsonl, one line per item:
-    {"item_id", "arm", "model", "p", "cost_usd", "latency_s", "error", "raw", "attempts"}
+    {"item_id", "arm", "model", "prompt", "p", "cost_usd", "latency_s", "error", "raw", "attempts"}
 An item already in the arm file with no error is skipped. An item that errored is
 tried again; its line then carries the summed cost of every attempt, so the sum
-of cost_usd over all files is the real spend.
+of cost_usd over all files is the real spend. One results folder holds one
+prompt version: a run with another version is refused (a line without "prompt"
+is v1).
 
-Exit codes: 0 done, 2 the pilot extrapolates above the cap, 3 a stop rule fired.
+Exit codes: 0 done, 1 refused (mixed prompt versions), 2 the pilot extrapolates
+above the cap, 3 a stop rule fired.
 """
 
 from __future__ import annotations
@@ -31,16 +35,31 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from arms import ARMS, DEFAULT_TRANSPORT, TRANSPORTS, JevArm, make_chat_arm  # noqa: E402
+from arms import ARMS, DEFAULT_PROMPT, DEFAULT_TRANSPORT, PROMPTS, TRANSPORTS, JevArm, make_chat_arm  # noqa: E402
 
-DEFAULT_DATA = ["data/mechanical.jsonl", "data/decoy.jsonl", "data/semantic.jsonl"]
-DEFAULT_ARMS = "accept_all,jev,haiku,opus"
-DEFAULT_OUT = "results/runs"
+# Defaults per prompt version. Each flag overrides its default.
+DEFAULTS = {
+    "v1": {
+        "data": ["data/mechanical.jsonl", "data/decoy.jsonl", "data/semantic.jsonl"],
+        "arms": "accept_all,jev,haiku,opus",
+        "out": "results/runs",
+        "budget": 8.00,  # PREREG.md
+    },
+    "v2": {
+        "data": ["data/v2/mechanical.jsonl", "data/v2/decoy.jsonl", "data/v2/semantic.jsonl"],
+        "arms": "accept_all,cite_script,jev,haiku,opus",
+        "out": "results/v2/runs",
+        "budget": 10.00,  # PREREG-v2.md
+    },
+}
+DEFAULT_DATA = DEFAULTS["v1"]["data"]
+DEFAULT_ARMS = DEFAULTS["v1"]["arms"]
+DEFAULT_OUT = DEFAULTS["v1"]["out"]
 DRY_RUN_OUT = "results/dry-run"  # keeps fake results out of the files metrics.py reads
 
-# --- stop rules. Fixed in PREREG.md. ----------------------------------------
+# --- stop rules. Fixed in PREREG.md and PREREG-v2.md. -----------------------
 
-BUDGET_USD = 8.00
+BUDGET_USD = DEFAULTS["v1"]["budget"]
 ERROR_RATE_MAX = 0.10  # stop an arm above this error rate ...
 ERROR_RATE_MIN_ITEMS = 20  # ... once it has answered at least this many items in this run
 
@@ -174,6 +193,21 @@ def spent_in(out_dir: str) -> float:
     return total
 
 
+def prompt_of(rec: dict) -> str:
+    return rec.get("prompt") or "v1"  # v1 lines predate the field
+
+
+def prompt_conflicts(out_dir: str, prompt: str) -> list:
+    """Result files in out_dir holding another prompt version. Every *.jsonl
+    counts, not only the arms of this run: one folder holds one version."""
+    found = []
+    for path in sorted(glob.glob(os.path.join(out_dir, "*.jsonl"))):
+        other = sorted({prompt_of(rec) for rec in read_records(path)} - {prompt})
+        if other:
+            found.append(f"{path} holds prompt {', '.join(other)}")
+    return found
+
+
 class Budget:
     """Spend so far plus the estimated cost of calls in flight, under one lock."""
 
@@ -199,9 +233,13 @@ class Budget:
 # --- the run ---------------------------------------------------------------
 
 
-def run_arm(arm, items: list, out_dir: str, budget: Budget, workers: int = 4, log=print) -> dict:
+def run_arm(arm, items: list, out_dir: str, budget: Budget, workers: int = 4, log=print, prompt=None) -> dict:
+    prompt = prompt or getattr(arm, "prompt", DEFAULT_PROMPT)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{arm.name}.jsonl")
+    conflicts = prompt_conflicts(out_dir, prompt)
+    if conflicts:
+        raise ValueError(f"refusing to mix prompt versions: {conflicts[0]}, this run is {prompt}; use a separate --out")
     done = load_arm(path, log)
     todo = [it for it in items if not (it["id"] in done and done[it["id"]].get("error") is None)]
 
@@ -250,6 +288,7 @@ def run_arm(arm, items: list, out_dir: str, budget: Budget, workers: int = 4, lo
                 "item_id": item["id"],
                 "arm": arm.name,
                 "model": pred.model,
+                "prompt": prompt,
                 "p": pred.p,
                 "cost_usd": pred.cost_usd,
                 "latency_s": round(pred.latency_s, 3),
@@ -332,17 +371,22 @@ def _no_network(*args, **kwargs):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", nargs="+", default=DEFAULT_DATA, help="item files or globs")
-    ap.add_argument("--arms", default=DEFAULT_ARMS, help=f"comma list from {','.join(ARMS)}")
+    ap.add_argument("--prompt", choices=list(PROMPTS), default=DEFAULT_PROMPT, help="prompt version (v2 adds the citation rule)")
+    ap.add_argument("--data", nargs="+", default=None, help="item files or globs (default per prompt version)")
+    ap.add_argument("--arms", default=None, help=f"comma list from {','.join(ARMS)} (default per prompt version)")
     ap.add_argument("--limit", type=int, default=None, help="first N items per tier")
     ap.add_argument("--dry-run", action="store_true", help="fake arm only, network disabled")
     ap.add_argument("--pilot", action="store_true", help="1 item per tier (first non-empty diff), then a spend table; exit 2 above the cap")
-    ap.add_argument("--budget", type=float, default=BUDGET_USD, help="spend cap in USD over all arm files")
+    ap.add_argument("--budget", type=float, default=None, help="spend cap in USD over all arm files (v1 8.00, v2 10.00)")
     ap.add_argument("--workers", type=int, default=4)
-    ap.add_argument("--out", default=None, help=f"results folder (default {DEFAULT_OUT}, dry run {DRY_RUN_OUT})")
+    ap.add_argument("--out", default=None, help=f"results folder (v1 {DEFAULT_OUT}, v2 {DEFAULTS['v2']['out']}, dry run {DRY_RUN_OUT})")
     ap.add_argument("--jev-model", default=None, help="override the jev arm's model id")
     ap.add_argument("--chat-transport", choices=TRANSPORTS, default=DEFAULT_TRANSPORT, help="how haiku and opus are called")
     args = ap.parse_args(argv)
+    defaults = DEFAULTS[args.prompt]
+    args.data = args.data or defaults["data"]
+    args.arms = args.arms or defaults["arms"]
+    args.budget = defaults["budget"] if args.budget is None else args.budget
 
     if args.dry_run:
         urllib.request.urlopen = _no_network
@@ -353,16 +397,25 @@ def main(argv=None) -> int:
     if unknown:
         sys.exit(f"run_eval: unknown arm(s) {', '.join(unknown)}; choose from {', '.join(ARMS)}")
     arms = {name: ARMS[name] for name in arm_names}
-    if args.jev_model and "jev" in arms:
-        arms["jev"] = JevArm(model=args.jev_model)
+    if "jev" in arms:
+        arms["jev"] = JevArm(model=args.jev_model or ARMS["jev"].model, prompt=args.prompt)
     for name in ("haiku", "opus"):
         if name in arms:
-            arms[name] = make_chat_arm(name, args.chat_transport)
+            arms[name] = make_chat_arm(name, args.chat_transport, args.prompt)
 
     if args.out:
         out_dir = os.path.abspath(args.out)
+    elif args.dry_run:
+        out_dir = os.path.join(HERE, DRY_RUN_OUT if args.prompt == "v1" else f"results/{args.prompt}/dry-run")
     else:
-        out_dir = os.path.join(HERE, DRY_RUN_OUT if args.dry_run else DEFAULT_OUT)
+        out_dir = os.path.join(HERE, defaults["out"])
+    conflicts = prompt_conflicts(out_dir, args.prompt)
+    if conflicts:
+        print(f"run_eval: refusing to mix prompt versions in one results folder (this run is {args.prompt}):")
+        for line in conflicts:
+            print(f"  {line}")
+        print("use a separate --out for each prompt version")
+        return 1
 
     all_items = load_items(resolve_data(args.data))
     if not all_items:
@@ -371,12 +424,12 @@ def main(argv=None) -> int:
 
     budget = Budget(args.budget, spent_in(out_dir))
     print(
-        f"run_eval: {len(items)} of {len(all_items)} items, arms {','.join(arms)}, out {out_dir}"
+        f"run_eval: prompt {args.prompt}, {len(items)} of {len(all_items)} items, arms {','.join(arms)}, out {out_dir}"
         f", spent so far ${budget.spent:.4f} of ${budget.cap:.2f}"
     )
     stopped = False
     for arm in arms.values():
-        summary = run_arm(arm, items, out_dir, budget, workers=args.workers)
+        summary = run_arm(arm, items, out_dir, budget, workers=args.workers, prompt=args.prompt)
         stopped = stopped or summary["stop"] is not None
     print(f"total spend over all arm files: ${spent_in(out_dir):.4f} of ${budget.cap:.2f}")
 
