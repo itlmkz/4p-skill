@@ -107,6 +107,37 @@ Verdict: keep it as an experiment. The one place it protects the AMO seat rather
 than replacing it is checking that a manufactured objection is actually supported
 by the material. That is worth exploring later, not now.
 
+### Evidence-check eval (measured 2026-10-15)
+
+The note above called the evidence check "worth exploring later". It is now
+measured: `experiments/evidence-eval/`, preregistered in its `PREREG.md`. 211
+findings on real public diffs, labeled by a script or by two blind reviewers.
+Jev against Haiku 5.5, Opus 5.5, and no gate. $6.31 for the whole run.
+
+Preregistered verdict, decided on the script-labeled cut:
+
+- **Pass:** Jev separates supported from unsupported findings (AUROC 0.883), is
+  calibrated (ECE 0.087), and rejects every empty diff.
+- **Fail:** Jev is 0.069 AUROC below Opus, outside the 0.05 bar, although it
+  costs 1/363 as much. Jev does not beat Haiku with an interval that excludes 0.
+
+What the post-hoc cuts suggest, as hypotheses for the next eval:
+
+- **The failures are citation strictness, not claim checking.** No arm enforces
+  the cited line: Jev accepts 13 of 15 true claims cited more than 5 lines away,
+  Opus 9 of 15. Without those items, Jev scores 0.976 against Opus 0.998 and beats
+  Haiku with an interval that excludes 0.
+- **So split the job.** A script checks the citation: is the file in the diff,
+  is the line inside a changed hunk. That check alone solves every wrong-file
+  item. Jev then checks the claim, at about $0.00008 per finding.
+- **At a cost ratio of 10, Jev is a safe gate.** It never rejected a true
+  finding and caught 47% of false ones. Haiku did worse than no gate.
+- **The semantic tier was too easy.** Every arm sits near AUROC 1.0 there. The
+  next eval needs semantic findings that are harder to refute.
+
+Decision for the owner: wire a citation check plus a Jev claim check into
+`--collect` as an advisory flag on each finding, or run the harder eval first.
+
 ## Overlap with pi-jev, which is already installed
 
 `npm:pi-jev` v0.3.0 is installed on this machine. It exposes `jev_evaluate` with
