@@ -34,6 +34,7 @@
   "scripts": {
     "test": "node --experimental-strip-types tests/extension.test.mjs && python3 tests/report.test.py && python3 tests/brief.test.py && python3 tests/launcher.test.py",
     "test:extension": "node --experimental-strip-types tests/extension.test.mjs",
-    "test:contract": "python3 tests/report.test.py && python3 tests/brief.test.py"
+    "test:contract": "python3 tests/report.test.py && python3 tests/brief.test.py",
+    "test:eval": "cd experiments/evidence-eval && python3 tests/arms.test.py && python3 tests/metrics.test.py && python3 tests/dataset.test.py && python3 build_dataset.py --check"
   }
 }
