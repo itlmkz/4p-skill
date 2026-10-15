@@ -26,6 +26,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCHEMA_PATH = os.path.join(HERE, "report.schema.json")
+REPORT_ID = "4p/report@1"
 
 # Simplified Technical English, rule 5.1. Enforced, not merely requested.
 # A language without spaces needs a character budget instead of a word budget.
@@ -185,31 +186,49 @@ def validate_report(report, schema: dict) -> list[str]:
 def extract(text: str) -> tuple[object | None, str]:
     """Pull the report out of raw pane output.
 
-    Panes are asked for one fenced json block. If a pane wraps it in prose, this
-    still finds it. Candidates are tried in order, and the first one that parses
-    is returned.
+    Panes are asked for one fenced json block, but the pane output holds more
+    than the answer: the draft piped to --validate during the self-check, and
+    any json a tool printed. The final answer comes last. So the last candidate
+    that carries "schema": "4p/report@1" wins. With no marked candidate, the last
+    candidate that parses wins.
     """
-    fenced = re.findall(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    candidates = [block.strip() for block in fenced]
-    decoder = json.JSONDecoder()
-    for i, ch in enumerate(text):
-        if ch != "{":
-            continue
+    found: list[tuple[int, object, str]] = []  # (offset, value, how)
+    spans: list[tuple[int, int]] = []
+    for match in re.finditer(r"```(?:json)?\s*(.*?)```", text, re.DOTALL):
         try:
-            value, _ = decoder.raw_decode(text[i:])
+            value = json.loads(match.group(1).strip())
         except json.JSONDecodeError:
             continue
-        candidates.append(value)
+        found.append((match.start(), value, "fenced block"))
+        spans.append((match.start(), match.end()))
 
-    for candidate in candidates:
-        if isinstance(candidate, str):
-            try:
-                return json.loads(candidate), "fenced block"
-            except json.JSONDecodeError:
-                continue
-        return candidate, "bare object"
+    # Bare objects outside the fenced blocks. A decoded object is skipped whole,
+    # so its nested objects never count as candidates of their own.
+    decoder = json.JSONDecoder()
+    i = 0
+    while i < len(text):
+        span = next((s for s in spans if s[0] <= i < s[1]), None)
+        if span:
+            i = span[1]
+            continue
+        if text[i] != "{":
+            i += 1
+            continue
+        try:
+            value, end = decoder.raw_decode(text, i)
+        except json.JSONDecodeError:
+            i += 1
+            continue
+        found.append((i, value, "bare object"))
+        i = end
 
-    return None, "no json found"
+    found.sort(key=lambda c: c[0])
+    marked = [c for c in found if isinstance(c[1], dict) and c[1].get("schema") == REPORT_ID]
+    pool = marked or found
+    if not pool:
+        return None, "no json found"
+    _, value, how = pool[-1]
+    return value, how
 
 
 def describe(schema: dict) -> str:

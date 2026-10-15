@@ -221,6 +221,28 @@ check("no json at all", extract("I could not complete the task.")[0], None)
 check("malformed json is not accepted", extract("```json\n{oops}\n```")[0], None)
 check("extracted report still validates", validate_report(extract(FENCED)[0], SCHEMA), [])
 
+# The pane output holds more than the final answer. The self-check pipes a draft
+# to --validate, and tools print their own json. The final report comes last.
+DRAFT = {**MINIMAL, "next_action": " ".join(["word"] * 21) + "."}
+FINAL = {**MINIMAL, "verdict": "ship", "findings": []}
+check("the draft is a real invalid report", errors_of(DRAFT) != [], True)
+SELF_CHECKED = (
+    "$ python3 panel/report.py --validate - <<'JSON'\n"
+    + json.dumps(DRAFT)
+    + "\nJSON\n- (stdin): 1 problem(s)\n  $.next_action: sentence has 21 words\n\n"
+    + "```json\n" + json.dumps(FINAL) + "\n```\n"
+)
+SELF_CHECKED_BARE = SELF_CHECKED.split("```json")[0] + json.dumps(FINAL) + "\n"
+check("invalid draft then valid final returns the final", extract(SELF_CHECKED_BARE), (FINAL, "bare object"))
+check("invalid draft then valid final: the final validates", errors_of(extract(SELF_CHECKED_BARE)[0]), [])
+check("invalid draft then valid final, fenced, returns the final", extract(SELF_CHECKED), (FINAL, "fenced block"))
+STRAY = '$ cat package.json\n{"name": "x", "version": "1.0.0"}\n\n' + json.dumps(FINAL)
+check("stray JSON before the report returns the report", extract(STRAY), (FINAL, "bare object"))
+TWO_FENCED = "```json\n" + json.dumps(MINIMAL) + "\n```\nOn reflection:\n```json\n" + json.dumps(FINAL) + "\n```"
+check("two fenced blocks returns the last report", extract(TWO_FENCED), (FINAL, "fenced block"))
+check("a nested object never wins over its report", extract("note " + json.dumps(MINIMAL))[0], MINIMAL)
+check("without a marker, the last parseable object wins", extract('{"a": 1} then {"b": 2}')[0], {"b": 2})
+
 
 # --- the contract description is derived, so it cannot drift -----------------
 
