@@ -21,6 +21,9 @@ got two contradictory output orders, and `--extract` could return a broken draft
   answer. Nested objects are no longer candidates of their own.
 - The AMO brief lost its em dashes and a stray space in the verdict format, so
   `tests/brief.test.py` passes again.
+- `--collect` reads the last 2000 lines of each pane, not 200. A self-check
+  draft plus a pretty-printed report could push the final block out of the
+  window. Safe now, because the last marked report wins.
 - New tests pin the extraction order, the fan-out marker, and the AMO output scope.
 
 ## 0.4.0

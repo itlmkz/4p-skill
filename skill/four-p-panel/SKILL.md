@@ -84,7 +84,7 @@ python3 panel/4p.py --collect
 ```
 
 This reads the panel state, waits for all panes in parallel (5 min timeout per
-pane), reads each pane's output, extracts and validates the JSON report, and
+pane), reads the last 2000 lines of each pane's output, extracts and validates the JSON report, and
 prints one JSON object:
 
 ```json
@@ -164,7 +164,7 @@ For sending follow-up tasks to individual panes after the initial collect:
 ```bash
 herdr agent prompt <name> "<task>" --wait --timeout 600000   # one pane, blocking
 herdr agent prompt <name> "<task>" --timeout 600000          # fire and continue
-herdr agent read <name> --source recent-unwrapped --lines 200 \
+herdr agent read <name> --source recent-unwrapped --lines 2000 \
   | python3 panel/report.py --extract -                      # the pane's report
 herdr agent list
 ```
@@ -215,7 +215,7 @@ and no prose around it. The pane validates its own answer before sending it.
 ```bash
 python3 panel/report.py --contract                 # the contract, derived from the schema
 python3 panel/report.py --validate report.json    # validate one report
-herdr agent read <name> --source recent-unwrapped --lines 200 \
+herdr agent read <name> --source recent-unwrapped --lines 2000 \
   | python3 panel/report.py --extract -           # pull the block out of pane output
 ```
 
