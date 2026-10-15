@@ -99,6 +99,59 @@ for role in ("tester", "reviewer", "bigpicture"):
     check(f"{role} task is unchanged", fourp.task_for(role, TASK), TASK)
 
 
+# --- --collect reads a window long enough for draft plus final report -------
+# The self-check draft, the validator output, and a ~150-line final report did
+# not fit in 200 lines. The window is pinned, and the last report must win in it.
+
+import contextlib  # noqa: E402
+import io  # noqa: E402
+import json  # noqa: E402
+import tempfile  # noqa: E402
+
+sys.path.insert(0, PANEL)
+from report import load_schema  # noqa: E402
+
+FINAL = {
+    "schema": "4p/report@1", "role": "tester", "verdict": "ship", "confidence": 0.9,
+    "findings": [], "next_action": "Ship it.",
+}
+DRAFT = {**FINAL, "next_action": " ".join(["word"] * 21) + "."}
+PANE_TEXT = (
+    "python3 report.py --validate - <<'JSON'\n" + json.dumps(DRAFT, indent=2) + "\nJSON\n"
+    + "\n".join(f"log line {n}" for n in range(300))
+    + "\n```json\n" + json.dumps(FINAL, indent=2) + "\n```\n"
+)
+reads: list[list[str]] = []
+
+
+def fake_herdr(*args: str, check: bool = True) -> dict:
+    if args[:2] == ("agent", "read"):
+        reads.append(list(args))
+        return {"output": PANE_TEXT, "_returncode": 0}
+    return {"_returncode": 0}
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    state_path = os.path.join(tmp, "panel.json")
+    with open(state_path, "w") as fh:
+        json.dump({"tab": "ws:1", "written_at": __import__("time").time(),
+                   "roles": {"tester": {"pane_id": "p2", "agent": "tester"}}}, fh)
+    real_herdr, fourp.herdr = fourp.herdr, fake_herdr
+    try:
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            code = fourp.collect_reports(state_path, tmp)
+    finally:
+        fourp.herdr = real_herdr
+    collected = json.loads(buf.getvalue())
+
+lines_arg = reads[0][reads[0].index("--lines") + 1]
+check("collect reads at least 1000 lines per pane", int(lines_arg) >= 1000, True)
+check("collect reads the pinned window", lines_arg, str(fourp.COLLECT_READ_LINES))
+check("the test pane text is longer than the old 200-line window", PANE_TEXT.count("\n") > 200, True)
+check("collect returns the final report, not the draft", collected["reports"]["tester"]["report"], FINAL)
+check("collect marks that pane ok", (collected["reports"]["tester"]["status"], code), ("ok", 0))
+
+
 # --- the posture is reported, not implied ------------------------------------
 
 check("claude is a supported kind for herdr", "claude" in fourp.AGENT_BASES.values() or True, True)

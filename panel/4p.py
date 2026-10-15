@@ -471,6 +471,10 @@ def kind_flags(kind: str, strict: bool, allow_write: bool) -> list[str]:
 
 
 COLLECT_TIMEOUT_MS = 300000  # 5 min per pane
+# A pretty-printed report runs to about 150 lines, and the self-check draft and
+# validator output come before it. 200 lines could cut the final block. extract()
+# takes the last marked report, so a longer window cannot let an older one win.
+COLLECT_READ_LINES = 2000
 
 
 def collect_reports(state_path: str, tab_dir: str) -> int:
@@ -502,7 +506,7 @@ def collect_reports(state_path: str, tab_dir: str) -> int:
             # Still try to read whatever the pane produced.
         # Read the pane output.
         read_payload = herdr(
-            "agent", "read", agent, "--source", "recent-unwrapped", "--lines", "200",
+            "agent", "read", agent, "--source", "recent-unwrapped", "--lines", str(COLLECT_READ_LINES),
             check=False,
         )
         raw = read_payload.get("output") or read_payload.get("raw") or ""
