@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.1
+
+`/4p` collects the panel reliably again.
+
+Three commits on 2026-09-19 changed the launcher and the skill but not
+`commands/4p.md`. The command still waited on each pane in series, the AMO seat
+got two contradictory output orders, and `--extract` could return a broken draft.
+
+- `commands/4p.md` collects with one `4p.py --collect` call and reads its json.
+  A role whose status is not `ok` is reported as failed, never guessed. The
+  command now carries the delegation rule and the AMO rapid checkpoint, with the
+  four verdict levels and the `no_critical` stop.
+- The fan-out sends the AMO its task marked `Full report (4p/report@1):`. The
+  brief header says json is for full reports, and the AMO answers a decision
+  checkpoint in three lines. The other three seats are unchanged.
+- `report.py --extract` takes the last candidate that carries
+  `"schema": "4p/report@1"`, and falls back to the last object that parses. A
+  self-check draft or stray json in tool output no longer wins over the final
+  answer. Nested objects are no longer candidates of their own.
+- The AMO brief lost its em dashes and a stray space in the verdict format, so
+  `tests/brief.test.py` passes again.
+- New tests pin the extraction order, the fan-out marker, and the AMO output scope.
+
 ## 0.4.0
 
 One `/4p` in Claude Code, and pi panes by default.
