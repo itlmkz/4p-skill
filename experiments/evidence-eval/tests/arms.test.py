@@ -3,7 +3,7 @@
 
     python3 tests/arms.test.py
 
-Covers answer parsing, the state never leaking labels, the jev and chat arms
+Covers prompt versions v1 and v2, the cite_script arm, answer parsing, the state never leaking labels, the jev and chat arms
 over stubbed transports (OpenRouter and the claude CLI), cache and resume, the budget stop, the error-rate stop,
 the pilot table, and fake-arm determinism.
 """
@@ -294,6 +294,210 @@ with tempfile.TemporaryDirectory() as tmp:
 
 subprocess.run = _no_subprocess
 
+
+# --- prompt versions (PREREG-v2.md) ------------------------------------------
+
+RULE = (
+    "A citation supports the claim only when the cited file is in the diff and the cited line is within 5 lines "
+    "of the code that supports the claim. Line numbers count in the new file for added and unchanged lines, and "
+    "in the old file for removed lines."
+)
+SMALL = {"diff": "+x = 1\n", "finding": {"claim": "c", "evidence": {"kind": "file", "file": "a.py", "line": 1}}}
+V1_SYSTEM = (
+    'You check one code review finding against the diff it was written about. You estimate the probability that '
+    'the finding is supported. Answer with one json object {"p_supported": <number from 0 to 1>} and nothing else.'
+)
+V1_USER = (
+    "Question: Does `diff` support the claim in `finding.claim`, given the evidence in `finding.evidence`?\n"
+    "True: The evidence exists in the diff and it supports the claim\n"
+    "False: The evidence is missing from the diff, or it does not support the claim\n"
+    'Answer with one json object {"p_supported": <number from 0 to 1>} and nothing else.\n'
+    "\n"
+    "State:\n"
+    '{"diff": "+x = 1\\n", "finding": {"claim": "c", "evidence": {"kind": "file", "file": "a.py", "line": 1}}}'
+)
+V1_JEV = {
+    "supported": {
+        "type": "noul",
+        "instructions": "Does `diff` support the claim in `finding.claim`, given the evidence in `finding.evidence`?",
+        "criteria": {
+            "true": "The evidence exists in the diff and it supports the claim",
+            "false": "The evidence is missing from the diff, or it does not support the claim",
+        },
+    }
+}
+check("PROMPTS has v1 and v2, default v1", (sorted(arms.PROMPTS), arms.DEFAULT_PROMPT), (["v1", "v2"], "v1"))
+check("v2 rule is PREREG-v2 word for word", arms.CITATION_RULE, RULE)
+check("v1 chat prompt text unchanged (pinned)", arms.chat_prompt(SMALL), (V1_SYSTEM, V1_USER))
+check("v1 chat prompt is the default", arms.chat_prompt(SMALL, "v1"), arms.chat_prompt(SMALL))
+check("v1 jev question unchanged (pinned)", arms.jev_questions("v1"), V1_JEV)
+check("v1 prompt has no rule", RULE in json.dumps([arms.chat_prompt(SMALL), arms.jev_questions()]), False)
+v2_sys, v2_user = arms.chat_prompt(SMALL, "v2")
+check("v2 chat system prompt is the v1 system prompt", v2_sys, V1_SYSTEM)
+check("v2 chat user message has the rule exactly once, as its own line", (v2_user.count(RULE), RULE in v2_user.split("\n")), (1, True))
+check("v2 chat user message is v1 plus one line", sorted(v2_user.split("\n")), sorted(V1_USER.split("\n") + [RULE]))
+v2_jev = arms.jev_questions("v2")["supported"]
+check("v2 jev instructions are v1 instructions plus the rule", v2_jev["instructions"], V1_JEV["supported"]["instructions"] + " " + RULE)
+check("v2 jev criteria unchanged", v2_jev["criteria"], V1_JEV["supported"]["criteria"])
+
+
+def raises(fn) -> bool:
+    try:
+        fn()
+    except ValueError:
+        return True
+    return False
+
+
+check("unknown prompt version is refused", (raises(lambda: arms.chat_prompt(SMALL, "v3")), raises(lambda: arms.JevArm(prompt="v3"))), (True, True))
+
+# v2 through every transport, with the leak check.
+sent.clear()
+arms.jev.ask = fake_ask
+pred = arms.JevArm(prompt="v2").predict(SECRET_ITEM)
+check("v2 jev arm sends the rule once in the noul instructions", json.dumps(sent["questions"]).count(RULE), 1)
+check("v2 jev payload carries no label, kind, rationale, tier, id", [m for m in LEAK_MARKERS if m in json.dumps(sent["state"])], [])
+arms.jev.ask = real_ask
+
+arms._post_chat = fake_post
+reply["content"] = '{"p_supported": 0.35}'
+make_chat_arm("haiku", "openrouter", "v2").predict(SECRET_ITEM)
+or_v2_user = posted["messages"][1]["content"]
+check("v2 openrouter user message has the rule exactly once", (or_v2_user.count(RULE), json.dumps(posted).count(json.dumps(RULE)[1:-1])), (1, 1))
+check("v2 openrouter payload carries no label, kind, rationale, tier, id", [m for m in LEAK_MARKERS if m in json.dumps(posted)], [])
+arms._post_chat = real_post
+
+subprocess.run = fake_run
+cli_reply.clear()
+cli_reply.update(stdout=cli_json('{"p_supported": 0.42}'))
+make_chat_arm("opus", "claude-cli", "v2").predict(SECRET_ITEM)
+argv, kwargs = cli_calls[-1]
+check("v2 claude-cli stdin has the rule exactly once, system prompt has none", (kwargs["input"].count(RULE), RULE in " ".join(argv)), (1, False))
+check("v2 user message identical across transports", kwargs["input"], or_v2_user)
+check("v2 claude-cli payload carries no label, kind, rationale, tier, id", [m for m in LEAK_MARKERS if m in json.dumps([argv, kwargs["input"]])], [])
+subprocess.run = _no_subprocess
+
+# Prompt version recorded, mixed versions refused.
+with tempfile.TemporaryDirectory() as tmp:
+    items = run_eval.load_items([FIXTURE])
+    quiet(run_eval.run_arm, ARMS["fake"], items, tmp, run_eval.Budget(8.0), workers=1, prompt="v2")
+    recs = run_eval.read_records(os.path.join(tmp, "fake.jsonl"))
+    check("prompt version recorded on every result line", {r["prompt"] for r in recs}, {"v2"})
+    check("run_arm refuses a cache from another prompt version", raises(lambda: quiet(run_eval.run_arm, ARMS["fake"], items, tmp, run_eval.Budget(8.0), workers=1, prompt="v1")), True)
+    code, out = quiet(run_eval.main, ["--data", FIXTURE, "--arms", "fake", "--out", tmp, "--prompt", "v1"])
+    check("run_eval refuses mixed prompt versions and says to use a separate --out", (code, "refusing to mix" in out, "separate --out" in out), (1, True, True))
+    code, out = quiet(run_eval.main, ["--data", FIXTURE, "--arms", "fake", "--out", tmp, "--prompt", "v2"])
+    check("same prompt version reuses the cache", (code, "cached=5" in out), (0, True))
+
+with tempfile.TemporaryDirectory() as tmp:
+    with open(os.path.join(tmp, "fake.jsonl"), "w") as fh:
+        fh.write(json.dumps({"item_id": "fix-1", "arm": "fake", "p": 0.5, "cost_usd": 0.0, "error": None}) + "\n")
+    code, out = quiet(run_eval.main, ["--data", FIXTURE, "--arms", "fake", "--out", tmp, "--prompt", "v2"])
+    check("a line without prompt counts as v1 and blocks a v2 run", (code, "holds prompt v1" in out), (1, True))
+    code, out = quiet(run_eval.main, ["--data", FIXTURE, "--arms", "fake", "--out", tmp])
+    check("a line without prompt is reused by a v1 run", (code, "cached=1" in out), (0, True))
+
+# --- cite_script ---------------------------------------------------------------
+
+CITE_DIFF = """diff --git a/src/app.py b/src/app.py
+index 1111111..2222222 100644
+--- a/src/app.py
++++ b/src/app.py
+@@ -10,7 +10,7 @@ def main():
+     a = 1
+     b = 2
+     c = 3
+-    d = old()
++    d = new()
+     e = 5
+     f = 6
+     g = 7
+@@ -40,4 +40,3 @@ def tail():
+     w = 1
+-    x = removed()
+-    y = removed_too()
++    xy = merged()
+     z = 4
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,1 +1,2 @@
+ # title
++more
+"""
+
+
+def cite(file, line, diff=CITE_DIFF):
+    item = {"id": "cite", "label": True, "tier": "mechanical", "kind": "near_line", "diff": diff,
+            "finding": {"claim": "c", "evidence": {"kind": "file", "file": file, "line": line}}}
+    return ARMS["cite_script"].predict(item)
+
+
+check("cite_script changed lines from hunk headers, both sides", sorted(arms.changed_lines(CITE_DIFF)["src/app.py"]), [13, 41, 42])
+check("cite_script: cited line on the changed line passes", cite("src/app.py", 13).p, 0.95)
+check("cite_script: in hunk, 5 lines off passes", (cite("src/app.py", 18).p, cite("src/app.py", 8).p), (0.95, 0.95))
+check("cite_script: 6 lines off fails", (cite("src/app.py", 19).p, cite("src/app.py", 7).p), (0.05, 0.05))
+check("cite_script: removed-line side (old file numbers) passes", cite("src/app.py", 42).p, 0.95)
+check("cite_script: within 5 of a removed line, past the new hunk end, passes", cite("src/app.py", 47).p, 0.95)
+check("cite_script: other file fails", cite("src/other.py", 13).p, 0.05)
+check("cite_script: second file in the diff is parsed", (cite("README.md", 2).p, cite("README.md", 8).p), (0.95, 0.05))
+check("cite_script: ./ prefix on the cited path is accepted", cite("./src/app.py", 13).p, 0.95)
+check("cite_script: a leading a/ on the cited path is a folder name, not a diff prefix", cite("a/src/app.py", 13).p, 0.05)
+for label, pred in [
+    ("empty diff", cite("src/app.py", 13, diff="")),
+    ("missing evidence line", cite("src/app.py", None)),
+    ("missing evidence file", cite(None, 13)),
+]:
+    check(f"cite_script: {label} gives 0.05 with no error", (pred.p, pred.error, pred.cost_usd), (0.05, None, 0.0))
+pred = ARMS["cite_script"].predict({"id": "x", "diff": CITE_DIFF})
+check("cite_script: missing finding gives 0.05 with no error", (pred.p, pred.error), (0.05, None))
+check("cite_script: plain unified diff without git headers", sorted(arms.changed_lines("--- a/f.py\n+++ b/f.py\n@@ -3,2 +3,2 @@\n-x\n+y\n k\n--- a/g.py\n+++ b/g.py\n@@ -1 +1 @@\n-q\n+r\n")), ["f.py", "g.py"])
+check("cite_script: new file from /dev/null", sorted(arms.changed_lines("--- /dev/null\n+++ b/n.py\n@@ -0,0 +1,2 @@\n+a\n+b\n")["n.py"]), [1, 2])
+check("cite_script on the fixture", [ARMS["cite_script"].predict(it).p for it in run_eval.load_items([FIXTURE])], [0.95, 0.05, 0.05, 0.95, 0.95])
+
+
+# --- v2 review findings ----------------------------------------------------------
+
+# Finding 1: one results folder holds one prompt version, whatever arms this run names.
+with tempfile.TemporaryDirectory() as tmp:
+    with open(os.path.join(tmp, "jev.jsonl"), "w") as fh:
+        fh.write(json.dumps({"item_id": "fix-1", "arm": "jev", "prompt": "v1", "p": 0.9, "cost_usd": 0.0001, "error": None}) + "\n")
+    code, out = quiet(run_eval.main, ["--prompt", "v2", "--arms", "cite_script", "--data", FIXTURE, "--limit", "1", "--out", tmp])
+    check("mixed folder: a v2 run of another arm into a folder holding v1 jev is refused", (code, "jev.jsonl holds prompt v1" in out), (1, True))
+    check("mixed folder: the refused run writes nothing", sorted(os.listdir(tmp)), ["jev.jsonl"])
+    check(
+        "mixed folder: run_arm also refuses on another arm's file",
+        raises(lambda: quiet(run_eval.run_arm, ARMS["cite_script"], run_eval.load_items([FIXTURE]), tmp, run_eval.Budget(8.0), workers=1, prompt="v2")),
+        True,
+    )
+
+# Finding 2: only "\n" ends a diff line; a form feed or other separator inside a line does not.
+FF_DIFF = "diff --git a/x.c b/x.c\n--- a/x.c\n+++ b/x.c\n@@ -1,3 +1,3 @@\n a\f b\n-c\n+C\n d\n"
+check("line split: a form feed inside a context line does not shift line numbers", sorted(arms.changed_lines(FF_DIFF)["x.c"]), [2])
+for sep in ["\v", "\x1c", "\x1d", "\x1e", "\x85", " ", " "]:
+    if sorted(arms.changed_lines(FF_DIFF.replace("\f", sep))["x.c"]) != [2]:
+        break
+else:
+    sep = None
+check("line split: no other unicode line separator shifts line numbers", sep, None)
+CRLF_DIFF = "diff --git a/x.c b/x.c\r\n--- a/x.c\r\n+++ b/x.c\r\n@@ -1,4 +1,4 @@\r\n a\r\n\r\n-c\r\n+C\r\n d\r\n"
+check("line split: a CRLF diff numbers like an LF diff", sorted(arms.changed_lines(CRLF_DIFF)["x.c"]), [3])
+sys.path.insert(0, os.path.join(HERE, ".."))
+import build_dataset  # noqa: E402
+
+for label, diff in [("form feed", FF_DIFF), ("CRLF", CRLF_DIFF)]:
+    lines = build_dataset.all_lines(build_dataset.parse_diff(diff))
+    built = sorted({ln.no for ln in lines if ln.op in "+-"})
+    check(f"line split: cite_script and build_dataset.parse_diff agree on a {label} diff", built, sorted(arms.changed_lines(diff)["x.c"]))
+
+# Finding 3: the cited path keeps a real top-level b/ folder; the cited line must be an int.
+B_DIFF = "diff --git a/b/x.py b/b/x.py\n--- a/b/x.py\n+++ b/b/x.py\n@@ -1 +1 @@\n-a\n+b\n"
+check("cite path: a top-level b/ folder in the cited path is kept", cite("b/x.py", 1, diff=B_DIFF).p, 0.95)
+check("cite path: the same file cited without its b/ folder fails", cite("x.py", 1, diff=B_DIFF).p, 0.05)
+for label, line in [("a boolean", True), ("a fractional", 13.5), ("an integral float", 13.0), ("a string", "13")]:
+    pred = cite("src/app.py", line)
+    check(f"cite line: {label} line gives 0.05 with a reason", (pred.p, pred.error, (pred.raw or {}).get("reason")), (0.05, None, "cited line is not an integer"))
+
 # --- fake and accept_all ---------------------------------------------------
 
 a = ARMS["fake"].predict({"id": "fix-1"})
@@ -303,7 +507,7 @@ check("fake arm is deterministic", a.p, b.p)
 check("fake arm varies by id", a.p != c.p, True)
 check("fake p in [0, 1] and free", (0.0 <= a.p <= 1.0, a.cost_usd, a.error), (True, 0.0, None))
 check("accept_all is 1.0 and free", (ARMS["accept_all"].predict({"id": "x"}).p, ARMS["accept_all"].predict({"id": "x"}).cost_usd), (1.0, 0.0))
-check("ARMS keys", sorted(ARMS), ["accept_all", "fake", "haiku", "jev", "opus"])
+check("ARMS keys", sorted(ARMS), ["accept_all", "cite_script", "fake", "haiku", "jev", "opus"])
 check("every arm has name and model", all(isinstance(x.name, str) and isinstance(x.model, str) for x in ARMS.values()), True)
 
 # --- runner: limit, cache and resume ---------------------------------------
@@ -337,7 +541,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check(
         "record shape",
         sorted(lines[0]),
-        sorted(["item_id", "arm", "model", "p", "cost_usd", "latency_s", "error", "raw"]),
+        sorted(["item_id", "arm", "model", "prompt", "p", "cost_usd", "latency_s", "error", "raw"]),
     )
     s2, _ = quiet(run_eval.run_arm, arm, items, tmp, run_eval.Budget(8.0), workers=4)
     check("second run skips all 5", (s2["n"], s2["cached"], arm.calls), (0, 5, 5))
