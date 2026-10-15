@@ -49,6 +49,10 @@ PROMPT_TIMEOUT_MS = 240000
 
 BRIEF_VERSION = "4p/brief@1"
 
+# The fan-out marks the AMO task with this, so the seat knows a full report is
+# wanted and not a three-line checkpoint. The brief quotes the same string.
+FULL_REPORT_MARKER = "Full report (4p/report@1):"
+
 # The panes speak a versioned contract in both directions: this brief in, and one
 # 4p/report@1 json block out. The contract text is derived from the schema at
 # runtime, so a brief can never describe a shape the validator will reject.
@@ -64,7 +68,8 @@ peers=$PEERS
 posture=$TOOL_POSTURE
 
 [OUTPUT]
-Your whole answer is one fenced json block.
+$OUTPUT_SCOPE
+A full report is one fenced json block.
 Write no prose before it. Write no prose after it.
 The block must satisfy the contract below.
 The coordinator reads it with report.py --extract, so any text outside the block is lost.
@@ -74,7 +79,7 @@ $REPORT_RULE
 $CONTRACT
 
 [SELF-CHECK]
-Before you answer, validate the exact json that you intend to emit.
+Before you send a full report, validate the exact json that you intend to emit.
 Put that json in the heredoc. The command must print "valid".
   python3 $VALIDATOR --validate - <<'JSON'
   <your json>
@@ -120,28 +125,28 @@ ROLE_BRIEFS = {
     "contraire": Template("""\
 Your role: AMO. You are a rapid decision checkpoint, not a slow reviewer.
 The coordinator sends you each decision and design choice as it comes up.
-You answer fast. Three lines, no prose.
+You answer a decision fast. Three lines, no prose.
 
 Your verdict scale:
-  yes         — sound, proceed.
-  yes_but     — proceed, but note the watch item.
-  no_but      — proceed only after the fix described in reason.
-  no_critical — stop. The risk is real. Ask the user.
+  yes          sound, proceed.
+  yes_but      proceed, but note the watch item.
+  no_but       proceed only after the fix described in reason.
+  no_critical  stop. The risk is real. Ask the user.
 
 How to decide:
 - Real risk is data loss, security, a broken deploy, an irreversible choice, or a silent behavior change. Block on those.
-- Taste, style, and preference are not risk. Say yes and move on.
+- Taste, style, and preference are not risk. Never block on taste. Say yes and move on.
 - When you lack context to judge, say yes_but and name what to verify.
 - Never manufacture objections. Say yes when the decision is sound.
 
-Format each answer exactly:
-  verdict: <yes|yes_but|no_but| no_critical>
+Format each decision answer exactly:
+  verdict: <yes|yes_but|no_but|no_critical>
   reason: <one sentence, 20 words max>
   watch: <optional, one line per item, max 3>
 
-For a full review (the coordinator asks "full report"), use the 4p/report@1
-contract instead. Reserve the full report for the initial task review, not for
-individual decisions.
+A task that starts with "$FULL_REPORT_MARKER" is the initial task review.
+Answer it with a full report in the 4p/report@1 contract, as [OUTPUT] says.
+Never use the full report for an individual decision.
 """),
     "tester": Template("""\
 Your role: tester. You verify empirically. Nothing is true because it reads well.
@@ -300,14 +305,32 @@ def free_agent_name(base: str, taken: set[str]) -> str:
     die(f"no free agent name left for {base}")
 
 
+def output_scope(role: str) -> str:
+    """Which answers must be a full report. Only the AMO seat has a second format."""
+    if role == "contraire":
+        return (
+            f'A task that starts with "{FULL_REPORT_MARKER}" gets a full report.\n'
+            "A decision checkpoint gets the three-line format from [ROLE], not json."
+        )
+    return "Your whole answer to each task is a full report."
+
+
+def task_for(role: str, task: str) -> str:
+    """The fan-out text for one seat. The AMO gets the full report marker."""
+    if role == "contraire":
+        return f"{FULL_REPORT_MARKER} {task}"
+    return task
+
+
 def brief_for(role: str, ctx: dict) -> str:
     head = BRIEF_HEAD.substitute(
         **ctx,
         ROLE_KEY=role,
         ROLE_LABEL=f"{LABEL_PREFIX}{role}",
         ROLE_NAME=ROLE_NAMES[role],
+        OUTPUT_SCOPE=output_scope(role),
     )
-    body = ROLE_BRIEFS[role].substitute(**ctx)
+    body = ROLE_BRIEFS[role].substitute(**ctx, FULL_REPORT_MARKER=FULL_REPORT_MARKER)
     return head + "\n[ROLE]\n" + body + BRIEF_TAIL.substitute(**ctx)
 
 
@@ -756,7 +779,7 @@ def main() -> int:
             if entry.get("brief", "").startswith("FAILED"):
                 continue
             # no --wait: fan out in parallel, the parent collects results afterwards
-            herdr("agent", "prompt", entry["agent"], task, check=False)
+            herdr("agent", "prompt", entry["agent"], task_for(role, task), check=False)
 
     save_state(state_path, tab_id, panel, "write-granted" if allow_write else "coordinator-writes")
 

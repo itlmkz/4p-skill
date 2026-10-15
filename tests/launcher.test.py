@@ -88,6 +88,17 @@ check("pi never receives --disallowedTools", "--disallowedTools" in flags("pi"),
 check("an unknown kind gets no flags", flags("gemini"), [])
 check("an unknown kind is never sent pi flags", flags("codex", strict=True), [])
 
+# --- the fan-out asks the AMO for a full report ------------------------------
+# The AMO answers decisions in three lines. Without the marker it does not know
+# the fan-out task wants a 4p/report@1 block, and --collect finds no json.
+
+TASK = "Review the retry policy in src/auth.ts."
+check("contraire task starts with the full report marker", fourp.task_for("contraire", TASK).startswith("Full report (4p/report@1):"), True)
+check("contraire task keeps the task text verbatim", fourp.task_for("contraire", TASK).endswith(TASK), True)
+for role in ("tester", "reviewer", "bigpicture"):
+    check(f"{role} task is unchanged", fourp.task_for(role, TASK), TASK)
+
+
 # --- the posture is reported, not implied ------------------------------------
 
 check("claude is a supported kind for herdr", "claude" in fourp.AGENT_BASES.values() or True, True)

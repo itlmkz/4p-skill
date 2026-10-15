@@ -102,6 +102,16 @@ check(
 # --- AMO seat naming ---------------------------------------------------------
 
 check("the AMO seat is named in the brief header", "AMO" in BRIEFS["contraire"], True)
+
+# --- the AMO has two formats, and the brief does not contradict itself -------
+
+check("AMO brief quotes the fan-out marker", fourp.FULL_REPORT_MARKER in BRIEFS["contraire"], True)
+check("AMO header scopes json to full reports", "three-line format" in BRIEFS["contraire"].split("[CONTRACT]")[0], True)
+check("AMO brief has the four-level scale", all(v in BRIEFS["contraire"] for v in ("yes_but", "no_but", "no_critical")), True)
+check("AMO header no longer orders json for every answer", "Your whole answer is one fenced json block" in BRIEFS["contraire"], False)
+for role in ("tester", "reviewer", "bigpicture"):
+    check(f"{role}: every task answer is a full report", "Your whole answer to each task is a full report" in BRIEFS[role], True)
+    check(f"{role}: no checkpoint format in its brief", "three-line" in BRIEFS[role], False)
 check("the launcher keeps the 4pp label for idempotency", fourp.LABEL_PREFIX, "4pp:")
 
 
