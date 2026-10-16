@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.5.0
+
+The coordinator checks each finding's evidence before it acts on it. Panel
+reports from a pi pane now reach the coordinator.
+
+### Evidence check
+
+A pane can cite a file and line that do not support its claim. The coordinator
+used to act on such a finding unread. The evidence-check eval
+(`experiments/evidence-eval/`, results in `docs/ROADMAP.md`) measured who should
+check it. Told the citation rule, Opus reached 0.98 citation accuracy, and Jev
+reached 0.68. A script plus Jev, the split design, had a decision cost of 0.349,
+against 0.246 for Opus alone. So the check belongs to the coordinator, which
+already is a strong model.
+
+- `--collect` adds `evidence_checks` to every role result. It is an empty list
+  when no report was found. Otherwise it has one entry for each finding, in
+  finding order.
+- Each entry has `index` (the 0-based position of the finding) and `finding`
+  (its id). A duplicate id is still unambiguous. It also has `kind`, `status`,
+  `file`, `line`, `in_diff`, `excerpt`, and an optional `reason` for a status
+  that is not `ok`.
+- Only `kind=file` is checked. The path is repo-relative. It resolves against
+  `git rev-parse --show-toplevel`, or the panel folder outside git, and never
+  outside that root.
+- The statuses are `ok`, `file_missing`, `outside_repo`, `line_out_of_range`,
+  and `not_checked`. `file_missing` also covers a directory, a FIFO, an
+  unreadable file, and an empty path. `line_out_of_range` also covers a missing
+  or non-integer line. `not_checked` covers other evidence kinds and a file over
+  8 MB.
+- An `ok` entry carries the cited line with two lines either side. Context
+  lines read `   41 | text` and the cited line reads `>> 42 | text`.
+- `in_diff` is true when the cited line is within 5 lines of a change in
+  `git diff HEAD`. Line numbers count in the current file. A deletion counts at its place
+  in the current file. An untracked file counts as changed. It is null when git
+  cannot answer or the status is not `ok`.
+- `commands/4p.md` has a new mandatory step: check each finding before you act
+  on it. It states the citation rule word for word. A missing file, an outside
+  path, or a missing line makes a finding unsupported. A blocking finding the
+  coordinator judges unsupported goes to the user as "unsupported", with the
+  reason. An unsupported non-blocking finding gets one line. Nothing is dropped
+  silently, and the merged view marks each finding acted on as checked.
+- The skill documents `evidence_checks` and the rule, and the merge rules now
+  start with the evidence check.
+- Brief rule 4 tells each pane to give a repo-relative path and the exact line
+  for `kind=file`. The line is a number in the current file, within 5 lines of
+  the supporting code. `tests/brief.test.py` checks that every role carries it.
+
+### Report transport
+
+A live panel in a separate Herdr tab showed two transport bugs.
+
+- The launch never worked from Claude Code. `4PP_TASK="..." python3 ...` is not
+  valid shell, because a name that starts with a digit cannot be assigned. Bash
+  and zsh answer "command not found". `commands/4p.md`, the skill, and the
+  README now set every `4PP_` variable with `env`. A launcher test forbids the
+  bare form.
+- pi draws a full-screen UI, so its earlier output never reaches the terminal
+  scrollback. `herdr agent read --lines 2000` returned only the 23 visible lines.
+  Every report in a 5-way split was unreadable, and pi also wrapped lines inside
+  json strings.
+- The fix: the self-check is now `report.py --validate - --save
+  /tmp/4pp/<tab>/<role>.json`. It writes the report only when it is valid, as
+  an atomic write with mode 0600.
+- The launcher removes old saved reports and records `task_sent_at` when it fans
+  out a task.
+- `--collect` prefers the saved file when it is newer than `task_sent_at`. It
+  must also be a regular file, owned by you, and under 1 MB. Otherwise it falls back to the pane.
+  Each role result has `source`, `"saved file"` or `"pane"`. When the file was
+  not used, `saved_file` says why.
+- A panel briefed before 0.5.0 does not know the save step. Run `--rebrief` once
+  after the upgrade.
+- After the fix, the live run returned all four reports with `all_ok` true. The
+  evidence checks pointed at the planted bug.
+
 ## 0.4.1
 
 `/4p` collects the panel reliably again.
