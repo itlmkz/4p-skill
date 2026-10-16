@@ -71,7 +71,12 @@ for role, brief in BRIEFS.items():
     check(f"{role}: forbids the em dash", "no em dash" in brief, True)
     check(f"{role}: forbids manufactured objections", "manufacture objections" in brief, True)
     check(f"{role}: has no em dash itself", "\u2014" not in brief, True)
-    check(f"{role}: under 6 KB", len(brief) < 6000, True)
+    check(f"{role}: under 6 KB", len(brief.encode("utf-8")) < 6000, True)
+    # The citation rule from the evidence-check eval. --collect checks file
+    # citations against it, so every seat must be told it.
+    check(f"{role}: cites file evidence within 5 lines", "within 5 lines of the code that supports the claim" in brief, True)
+    check(f"{role}: cites line numbers in the current file", "line number in the current file" in brief, True)
+    check(f"{role}: cites repo-relative paths", "repo-relative path" in brief, True)
     # An unsubstituted Template placeholder is a silent briefing bug.
     leftovers = re.findall(r"\$[A-Z_]{3,}", brief)
     check(f"{role}: no unsubstituted placeholders", leftovers, [])

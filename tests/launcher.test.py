@@ -152,6 +152,105 @@ check("collect returns the final report, not the draft", collected["reports"]["t
 check("collect marks that pane ok", (collected["reports"]["tester"]["status"], code), ("ok", 0))
 
 
+# --- the report travels as a file, because a full-screen pane hides it -------
+# pi draws a full-screen UI, so its earlier output never reaches the terminal
+# scrollback: `herdr agent read --lines 2000` returned 23 visible lines in a
+# live run, and a long report could not be read. The self-check now saves the
+# validated report, and --collect prefers that file when it is safe and fresh.
+
+for role in fourp.ROLE_ORDER:
+    brief = fourp.brief_for(role, {
+        "CWD": "/r", "TAB_ID": "t", "PANE_ID": "p", "CALLER_PANE": "c", "TOOL_POSTURE": "x",
+        "REPORT_RULE": "r", "CONTRACT": "c", "VALIDATOR": "/v/report.py", "BRIEF_VERSION": fourp.BRIEF_VERSION,
+        "PEERS": "a", "TAB_DIR": "/tmp/4pp/ws-1",
+    })
+    check(f"{role}: self-check saves to its own report file", f"--save /tmp/4pp/ws-1/{role}.json" in brief, True)
+
+SAVED = {**FINAL, "role": "reviewer", "next_action": "Read the saved copy."}
+
+
+def collect_with(tmp: str, saved_age: float | None, task_sent_offset: float | None, link: bool = False) -> dict:
+    """Run collect_reports with one reviewer whose pane shows only junk.
+
+    saved_age: seconds before now that the saved file was written, or None for no file.
+    task_sent_offset: seconds before now that the task went out, or None for no send time.
+    """
+    now = __import__("time").time()
+    state = {"tab": "ws:1", "written_at": now, "roles": {"reviewer": {"pane_id": "p2", "agent": "reviewer"}}}
+    if task_sent_offset is not None:
+        state["task_sent_at"] = now - task_sent_offset
+    with open(os.path.join(tmp, "panel.json"), "w") as fh:
+        json.dump(state, fh)
+    path = fourp.saved_report_path(tmp, "reviewer")
+    for p in (path, path + ".real"):
+        if os.path.lexists(p):
+            os.unlink(p)
+    if saved_age is not None:
+        target = path + ".real" if link else path
+        with open(target, "w") as fh:
+            json.dump(SAVED, fh)
+        os.utime(target, (now - saved_age, now - saved_age))
+        if link:
+            os.symlink(target, path)
+
+    def visible_only(*args: str, check: bool = True) -> dict:
+        if args[:2] == ("agent", "read"):
+            return {"output": '     "next_action": "Revert the floor\n division."\n   }\n ```', "_returncode": 0}
+        return {"_returncode": 0}
+
+    real, fourp.herdr = fourp.herdr, visible_only
+    try:
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            fourp.collect_reports(os.path.join(tmp, "panel.json"), tmp)
+    finally:
+        fourp.herdr = real
+    return json.loads(buf.getvalue())["reports"]["reviewer"]
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    got = collect_with(tmp, saved_age=10, task_sent_offset=60)
+    check("saved report written after the task is used", (got["status"], got["source"], got["report"]), ("ok", "saved file", SAVED))
+    got = collect_with(tmp, saved_age=120, task_sent_offset=60)
+    check("saved report older than the task is ignored", (got["source"], got.get("saved_file")), ("pane", "older than the task"))
+    got = collect_with(tmp, saved_age=10, task_sent_offset=None)
+    check("without a task send time, a saved report is not trusted", got.get("saved_file"), "no task send time recorded")
+    got = collect_with(tmp, saved_age=10, task_sent_offset=60, link=True)
+    check("a symlinked saved report is not followed", got.get("saved_file"), "not a regular file")
+    got = collect_with(tmp, saved_age=None, task_sent_offset=60)
+    check("no saved file falls back to the pane and says why", (got["source"], got.get("saved_file")), ("pane", "not saved"))
+    check("the pane fallback still reports what it found", got["status"].startswith("no json block"), True)
+    real_uid, os.getuid = os.getuid, lambda: real_uid() + 1
+    try:
+        got = collect_with(tmp, saved_age=10, task_sent_offset=60)
+    finally:
+        os.getuid = real_uid
+    check("a saved report owned by another user is not trusted", got.get("saved_file"), "owned by another user")
+
+
+# --- 4PP_ names start with a digit, so a shell can only set them through env ---
+# `4PP_TASK=x cmd` is "command not found" in bash and zsh. The command file is
+# what Claude Code runs, so every shell assignment there must go through env.
+
+import re  # noqa: E402
+
+ROOT = os.path.join(HERE, "..")
+ASSIGN = re.compile(r"(?<![\w-])4PP_[A-Z_]+=")
+for doc in ("commands/4p.md", "skill/four-p-panel/SKILL.md", "README.md"):
+    with open(os.path.join(ROOT, doc)) as fh:
+        text = fh.read()
+    shell_lines, fence = [], None
+    for ln in text.splitlines():
+        if ln.lstrip().startswith("```"):
+            fence = None if fence is not None else ln.strip()[3:].strip()
+            continue
+        if fence in ("", "bash", "sh"):
+            shell_lines.append(ln)
+    bad = [ln.strip() for ln in shell_lines if ASSIGN.search(ln) and not re.search(r"\benv\b", ln)]
+    check(f"{doc}: every 4PP_ assignment in a shell block goes through env", bad, [])
+with open(os.path.join(ROOT, "commands/4p.md")) as fh:
+    check("commands/4p.md launches with env 4PP_TASK", 'env 4PP_TASK="$ARGUMENTS" python3' in fh.read(), True)
+
+
 # --- the posture is reported, not implied ------------------------------------
 
 check("claude is a supported kind for herdr", "claude" in fourp.AGENT_BASES.values() or True, True)

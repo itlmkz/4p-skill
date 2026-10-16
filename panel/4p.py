@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -72,7 +73,7 @@ $OUTPUT_SCOPE
 A full report is one fenced json block.
 Write no prose before it. Write no prose after it.
 The block must satisfy the contract below.
-The coordinator reads it with report.py --extract, so any text outside the block is lost.
+The coordinator reads the copy that the self-check saves, so any text outside the block is lost.
 $REPORT_RULE
 
 [CONTRACT]
@@ -81,10 +82,10 @@ $CONTRACT
 [SELF-CHECK]
 Before you send a full report, validate the exact json that you intend to emit.
 Put that json in the heredoc. The command must print "valid".
-  python3 $VALIDATOR --validate - <<'JSON'
+  python3 $VALIDATOR --validate - --save $REPORT_FILE <<'JSON'
   <your json>
   JSON
-Fix each problem it reports. Then answer.
+Fix each problem it reports. When it prints "valid", it also saves the report for the coordinator. Then answer.
 """)
 
 BRIEF_TAIL = Template("""\
@@ -93,7 +94,7 @@ BRIEF_TAIL = Template("""\
 1. Stand by until you get a task.
 2. The coordinator pane is the only writer. Never change repo files or git state on your own initiative.
 3. You are an advisor. Never fix the code, even when the fix is one line.
-4. Carry evidence for each finding: kind=file with file and line, or kind=command with command and observed.
+4. Carry evidence for each finding: kind=file with file and line, or kind=command with command and observed. For kind=file, give a repo-relative path and the exact line as a line number in the current file. That line must be within 5 lines of the code that supports the claim.
 5. When you cannot verify something, use verdict=could_not_verify and fill could_not_verify. Never guess.
 6. Never merge, push, commit, revert, stash, or delete. Never run a destructive command.
 7. Free text is Simplified Technical English: one sentence, 20 words maximum, active voice, no em dash. Chinese, Japanese, and Korean get a 45-character budget instead. The validator enforces the length and the em dash.
@@ -322,9 +323,15 @@ def task_for(role: str, task: str) -> str:
     return task
 
 
+def saved_report_path(tab_dir: str, role: str) -> str:
+    """Where a pane's self-check saves its full report for --collect."""
+    return os.path.join(tab_dir, f"{role}.json")
+
+
 def brief_for(role: str, ctx: dict) -> str:
     head = BRIEF_HEAD.substitute(
         **ctx,
+        REPORT_FILE=saved_report_path(ctx.get("TAB_DIR", REPORT_DIR), role),
         ROLE_KEY=role,
         ROLE_LABEL=f"{LABEL_PREFIX}{role}",
         ROLE_NAME=ROLE_NAMES[role],
@@ -373,7 +380,7 @@ def load_state(state_path: str, max_age_s: int = 24 * 3600) -> dict:
     return data
 
 
-def save_state(state_path: str, tab_id: str, panel: dict, posture: str = "") -> None:
+def save_state(state_path: str, tab_id: str, panel: dict, posture: str = "", task_sent_at: float | None = None) -> None:
     roles = {
         role: {"pane_id": entry["pane_id"], "agent": entry.get("agent", "")}
         for role, entry in panel.items()
@@ -386,6 +393,8 @@ def save_state(state_path: str, tab_id: str, panel: dict, posture: str = "") -> 
         "posture": posture,
         "roles": roles,
     }
+    if task_sent_at is not None:
+        data["task_sent_at"] = task_sent_at
     try:
         os.makedirs(os.path.dirname(state_path), exist_ok=True)
         with open(state_path, "w") as fh:
@@ -471,6 +480,38 @@ def kind_flags(kind: str, strict: bool, allow_write: bool) -> list[str]:
 
 
 COLLECT_TIMEOUT_MS = 300000  # 5 min per pane
+SAVED_REPORT_MAX_BYTES = 1_000_000
+
+
+def read_saved_report(path: str, since: float | None) -> tuple[object | None, str]:
+    """A report a pane saved for this task, or (None, why it was not used).
+
+    The panel folder lives under /tmp, so the file is trusted only when it is a
+    regular file (not a symlink), owned by this user, small, and written after
+    the task went out. A panel started without a task has no send time, so its
+    saved files are never used.
+    """
+    if since is None:
+        return None, "no task send time recorded"
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None, "not saved"
+    except OSError as exc:
+        return None, f"unreadable: {exc}"
+    if not stat.S_ISREG(st.st_mode):
+        return None, "not a regular file"
+    if st.st_uid != os.getuid():
+        return None, "owned by another user"
+    if st.st_size > SAVED_REPORT_MAX_BYTES:
+        return None, "too large"
+    if st.st_mtime < since:
+        return None, "older than the task"
+    try:
+        with open(path) as fh:
+            return json.load(fh), ""
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, f"not valid json: {exc}"
 # A pretty-printed report runs to about 150 lines, and the self-check draft and
 # validator output come before it. 200 lines could cut the final block. extract()
 # takes the last marked report, so a longer window cannot let an older one win.
@@ -485,6 +526,7 @@ def collect_reports(state_path: str, tab_dir: str) -> int:
     if PANEL_DIR not in sys.path:
         sys.path.insert(0, PANEL_DIR)
     from report import extract, validate_report, load_schema
+    from evidence import check_report, git_diff, repo_root
 
     state = load_state(state_path)
     roles = state.get("roles") or {}
@@ -492,18 +534,41 @@ def collect_reports(state_path: str, tab_dir: str) -> int:
         die(f"no panel state at {state_path}. Run the launcher first.")
 
     schema = load_schema()
+    # Evidence checks read files inside the repository only: the git top level,
+    # or the panel folder outside git. Cited paths are repo-relative.
+    cwd = state.get("cwd") or os.getcwd()
+    root = repo_root(cwd)
+    diff_lines, diff_error = git_diff(cwd)
+
+    def judged(report: object, source: str, saved_why: str = "") -> dict:
+        errors = validate_report(report, schema)
+        out = {
+            "status": "invalid" if errors else "ok",
+            "report": report,
+            "errors": errors,
+            "evidence_checks": check_report(report, root, diff_lines),
+            "source": source,
+        }
+        if saved_why:
+            out["saved_file"] = saved_why
+        return out
 
     def _collect_one(item: tuple[str, dict]) -> tuple[str, dict]:
         role, rec = item
         agent = rec.get("agent", "")
         pane_id = rec.get("pane_id", "")
         if not agent:
-            return role, {"status": "no agent", "report": None, "errors": []}
+            return role, {"status": "no agent", "report": None, "errors": [], "evidence_checks": []}
         # Wait for the pane to finish.
         wait_payload = herdr("agent", "wait", agent, "--timeout", str(COLLECT_TIMEOUT_MS), check=False)
         if wait_payload.get("_returncode") != 0:
             err = (wait_payload.get("error") or {}).get("message") or wait_payload.get("raw") or "wait failed"
             # Still try to read whatever the pane produced.
+        # Prefer the report the pane's self-check saved: a full-screen agent keeps
+        # its output out of the scrollback, so a long report cannot be read back.
+        saved, saved_why = read_saved_report(saved_report_path(tab_dir, role), state.get("task_sent_at"))
+        if saved is not None:
+            return role, judged(saved, "saved file")
         # Read the pane output.
         read_payload = herdr(
             "agent", "read", agent, "--source", "recent-unwrapped", "--lines", str(COLLECT_READ_LINES),
@@ -512,16 +577,13 @@ def collect_reports(state_path: str, tab_dir: str) -> int:
         raw = read_payload.get("output") or read_payload.get("raw") or ""
         if not raw and read_payload.get("_returncode") != 0:
             err = (read_payload.get("error") or {}).get("message") or "read failed"
-            return role, {"status": f"read failed: {err}", "report": None, "errors": []}
+            return role, {"status": f"read failed: {err}", "report": None, "errors": [], "evidence_checks": []}
         # Extract the JSON block.
         report, how = extract(raw)
         if report is None:
-            return role, {"status": f"no json block ({how})", "report": None, "errors": []}
-        # Validate.
-        errors = validate_report(report, schema)
-        if errors:
-            return role, {"status": "invalid", "report": report, "errors": errors}
-        return role, {"status": "ok", "report": report, "errors": []}
+            return role, {"status": f"no json block ({how})", "report": None, "errors": [],
+                          "evidence_checks": [], "source": "pane", "saved_file": saved_why}
+        return role, judged(report, "pane", saved_why)
 
     items = list(roles.items())
     results: dict[str, dict] = {}
@@ -531,6 +593,9 @@ def collect_reports(state_path: str, tab_dir: str) -> int:
 
     out = {
         "tab": state.get("tab", ""),
+        "cwd": cwd,
+        "root": root,
+        "diff": "git diff HEAD plus untracked files" if diff_lines is not None else f"unavailable: {diff_error}",
         "reports": results,
         "all_ok": all(r["status"] == "ok" for r in results.values()),
     }
@@ -577,12 +642,10 @@ def main() -> int:
             "needs a change, return the exact patch (file, anchor text, replacement) and the coordinator applies it."
         )
     report_rule = (
-        f"Also write the same json block to {tab_dir}/<role>.json."
-        if allow_write
-        else "Answer in your pane only. Do not write a file. The coordinator extracts the block."
+        "Answer in your pane. The self-check command saves the same report in the panel folder. "
+        "Write no other file."
     )
-    if allow_write:
-        os.makedirs(tab_dir, exist_ok=True)
+    os.makedirs(tab_dir, mode=0o700, exist_ok=True)
 
     panes = panes_in_tab(tab_id)
     agents = live_agents()
@@ -625,7 +688,7 @@ def main() -> int:
     if allow_write and caller_label.startswith(LABEL_PREFIX):
         die(
             "a panel pane cannot grant itself write approval. Ask the coordinator pane to run /4pp with "
-            "4PP_COORDINATOR_GRANTS_WRITE=1 if that is the intent."
+            "env 4PP_COORDINATOR_GRANTS_WRITE=1 if that is the intent."
         )
     if caller_label.startswith(LABEL_PREFIX):
         caller_role = caller_label[len(LABEL_PREFIX):]
@@ -740,6 +803,7 @@ def main() -> int:
         "CALLER_PANE": caller_pane,
         "TOOL_POSTURE": tool_posture,
         "REPORT_RULE": report_rule,
+        "TAB_DIR": tab_dir,
         "CONTRACT": contract,
         "VALIDATOR": validator,
         "BRIEF_VERSION": BRIEF_VERSION,
@@ -774,8 +838,17 @@ def main() -> int:
             for role, brief_status in pool.map(_send_brief, briefs_to_send):
                 panel[role]["brief"] = brief_status
 
-    # 6. Optional fan-out of a task to the whole panel.
+    # 6. Optional fan-out of a task to the whole panel. Saved reports from an
+    #    earlier task are removed first, and the send time is recorded, so
+    #    --collect never mistakes an old report for an answer to this task.
+    task_sent_at = None
     if task:
+        for role in ROLE_ORDER:
+            try:
+                os.unlink(saved_report_path(tab_dir, role))
+            except FileNotFoundError:
+                pass
+        task_sent_at = time.time()
         for role in ROLE_ORDER:
             entry = panel[role]
             if entry["status"] == "caller" or entry["status"].startswith("FAILED") or entry["status"].startswith("occupied"):
@@ -785,7 +858,7 @@ def main() -> int:
             # no --wait: fan out in parallel, the parent collects results afterwards
             herdr("agent", "prompt", entry["agent"], task_for(role, task), check=False)
 
-    save_state(state_path, tab_id, panel, "write-granted" if allow_write else "coordinator-writes")
+    save_state(state_path, tab_id, panel, "write-granted" if allow_write else "coordinator-writes", task_sent_at)
 
     out = {
         "tab": tab_id,

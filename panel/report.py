@@ -8,6 +8,7 @@ tool, so a malformed report can never reach the merge step.
     report.py --validate FILE            validate one report
     report.py --extract [FILE]           pull the json block out of raw pane text
     report.py --extract FILE --validate  extract, then validate what came out
+    report.py --validate - --save PATH   validate, and save the report to PATH only when valid
 
 Reads stdin when FILE is absent or "-". Exits 0 when valid, 1 when not, and
 prints one precise line per problem.
@@ -307,6 +308,7 @@ def main() -> int:
     ap.add_argument("--validate", action="store_true", help="validate")
     ap.add_argument("--extract", action="store_true", help="pull json out of raw pane text")
     ap.add_argument("--json", action="store_true", help="with --extract, print the report")
+    ap.add_argument("--save", metavar="PATH", help="with --validate, write the report to PATH when it is valid")
     args = ap.parse_args()
 
     schema = load_schema()
@@ -345,7 +347,36 @@ def main() -> int:
         return 1
 
     print(f"{source}: valid 4p/report@1")
+    if args.save:
+        try:
+            save_report(report, args.save)
+        except OSError as exc:
+            print(f"report: could not save to {args.save}: {exc}", file=sys.stderr)
+            return 1
+        print(f"saved to {args.save}")
     return 0
+
+
+def save_report(report: object, path: str) -> None:
+    """Write a validated report atomically, readable by this user only.
+
+    A full-screen agent such as pi keeps its output out of the terminal
+    scrollback, so --collect cannot read a long report from the pane. The pane
+    hands it over through this file instead. The temp file plus rename means
+    the coordinator never reads half a report.
+    """
+    folder = os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    tmp = os.path.join(folder, f".{os.path.basename(path)}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(report, fh, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 if __name__ == "__main__":
