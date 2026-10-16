@@ -244,6 +244,27 @@ check("a nested object never wins over its report", extract("note " + json.dumps
 check("without a marker, the last parseable object wins", extract('{"a": 1} then {"b": 2}')[0], {"b": 2})
 
 
+# --- --save hands a valid report to --collect, and never an invalid one -------
+
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+
+VALIDATOR = os.path.join(HERE, "..", "panel", "report.py")
+with tempfile.TemporaryDirectory() as tmp:
+    target = os.path.join(tmp, "sub", "reviewer.json")
+    run = subprocess.run([sys.executable, VALIDATOR, "--validate", "-", "--save", target],
+                         input=json.dumps(MINIMAL), capture_output=True, text=True)
+    check("--save: a valid report exits 0", run.returncode, 0)
+    with open(target) as fh:
+        check("--save: the saved file holds the report", json.load(fh), MINIMAL)
+    check("--save: the saved file is readable by this user only", oct(os.stat(target).st_mode & 0o777), "0o600")
+    check("--save: no temp file is left behind", sorted(os.listdir(os.path.dirname(target))), ["reviewer.json"])
+    bad = os.path.join(tmp, "bad.json")
+    run = subprocess.run([sys.executable, VALIDATOR, "--validate", "-", "--save", bad],
+                         input=json.dumps({**MINIMAL, "verdict": "maybe"}), capture_output=True, text=True)
+    check("--save: an invalid report exits 1 and saves nothing", (run.returncode, os.path.exists(bad)), (1, False))
+
+
 # --- the contract description is derived, so it cannot drift -----------------
 
 contract = describe(SCHEMA)
