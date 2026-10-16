@@ -51,7 +51,7 @@ The flag depends on the agent kind: `pi` gets `--exclude-tools edit,write`, and
 flag gets none, so its posture is the brief alone. Never describe that as enforced.
 
 This is a contract, not a kernel boundary: bash stays available because panes
-need it to run tests. For an enforced version, set `4PP_STRICT_NO_WRITE=1` and
+need it to run tests. For an enforced version, set `env 4PP_STRICT_NO_WRITE=1` and
 the panes get `read,grep,find,ls` only, at the cost of not being able to run
 tests.
 
@@ -67,15 +67,17 @@ The mandatory sequence after launching the panel with a task:
 
 1. **Launch**: run the launcher. It fans the task out to all four panes in
    parallel and returns immediately.
-2. **Collect**: run `4p.py --collect`. It waits for all four panes in parallel,
-   reads their output, extracts the JSON reports, validates them, and prints
-   the results as one JSON object to stdout.
-3. **Read**: read the JSON output. Each role has a `status` and a `report`.
-4. **Merge**: present one merged view to the user (see Merge rules below).
-5. **Implement**: only now, apply the findings from the merged report.
+2. **Collect**: run `4p.py --collect`. It waits for all four panes in parallel.
+   It takes each report from its saved file or the pane, and validates it. It
+   checks each finding's file citation and prints one JSON object to stdout.
+3. **Read**: read the JSON output. Each role has a `status`, a `report`, and
+   `evidence_checks`.
+4. **Check**: check each finding's evidence under the citation rule below.
+5. **Merge**: present one merged view to the user (see Merge rules below).
+6. **Implement**: only now, apply the checked findings from the merged report.
 
-You MUST NOT skip step 2. You MUST NOT implement before step 4. The panes exist
-to catch what you miss. If you skip them, the panel is wasted.
+You MUST NOT skip step 2 or step 4. You MUST NOT implement before step 5. The
+panes exist to catch what you miss. If you skip them, the panel is wasted.
 
 ### The collect command
 
@@ -83,26 +85,87 @@ to catch what you miss. If you skip them, the panel is wasted.
 python3 panel/4p.py --collect
 ```
 
-This reads the panel state, waits for all panes in parallel (5 min timeout per
-pane), reads the last 2000 lines of each pane's output, extracts and validates the JSON report, and
-prints one JSON object:
+This reads the panel state and waits for all panes in parallel, with a 5 min
+timeout per pane. It takes one `4p/report@1` block for each role, validates it,
+and checks its evidence. It prints one JSON object:
 
 ```json
 {
   "tab": "wJ:t3",
   "reports": {
-    "contraire": {"status": "ok", "report": {...}, "errors": []},
-    "tester":    {"status": "ok", "report": {...}, "errors": []},
-    "reviewer":  {"status": "ok", "report": {...}, "errors": []},
-    "bigpicture":{"status": "ok", "report": {...}, "errors": []}
+    "contraire":  {"status": "ok", "source": "saved file", "report": {...}, "errors": [], "evidence_checks": [...]},
+    "tester":     {"status": "ok", "source": "saved file", "report": {...}, "errors": [], "evidence_checks": [...]},
+    "reviewer":   {"status": "ok", "source": "saved file", "report": {...}, "errors": [], "evidence_checks": [...]},
+    "bigpicture": {"status": "ok", "source": "pane", "saved_file": "not saved", "report": {...}, "errors": [], "evidence_checks": [...]}
   },
   "all_ok": true
 }
 ```
 
-A pane whose `status` is not `"ok"` either failed to produce a report or
-produced an invalid one. Report the failure to the user; do not guess what the
-pane meant.
+The command exits 1 when `all_ok` is false. That is a result, not a crash. A
+pane whose `status` is not `"ok"` either failed to produce a report or produced
+an invalid one. Report the failure to the user. Do not guess what the pane meant.
+
+`source` is `"saved file"` or `"pane"`. When the collector did not use the saved
+file, `saved_file` says why.
+
+### Why reports travel as a file
+
+pi draws a full-screen UI, so its earlier output never reaches the terminal
+scrollback. A pane read returns only the visible lines, and pi also wraps long
+lines inside json strings. So the pane's self-check,
+`report.py --validate - --save /tmp/4pp/<tab>/<role>.json`, saves the report
+when it is valid. The write is atomic, with mode 0600. The launcher removes old
+saved reports and records `task_sent_at` when it fans out a task. `--collect`
+uses the saved file only when it is newer than `task_sent_at`. It must also be a
+regular file, owned by you, and under 1 MB. Otherwise it falls back to the last 2000 lines of the
+pane. A panel briefed before 0.5.0 does not know the save step, so run
+`/4p --rebrief <task>` once after an upgrade.
+
+### Evidence checks
+
+Every role result has `evidence_checks`, an empty list when no report was found.
+Otherwise it has one entry for each finding, in finding order:
+
+```json
+{"index": 0, "finding": "r1", "kind": "file", "status": "ok", "file": "src/app.py", "line": 42,
+ "in_diff": true, "excerpt": "   40 | ...\n   41 | ...\n>> 42 | ...\n   43 | ...\n   44 | ..."}
+```
+
+`index` is the 0-based position of the finding, and `finding` is its id. Match by
+`index`, because two findings can share an id. An optional `reason` explains a
+status that is not `ok`. The `file` path is repo-relative. It resolves against the
+git top level, or the panel folder outside git, and never outside that root.
+
+| `status` | Meaning |
+| --- | --- |
+| `ok` | The file and the line exist. `excerpt` shows lines line-2 to line+2. |
+| `file_missing` | The file does not exist, or it is a directory, a FIFO, or unreadable. An empty path also gets this status. |
+| `outside_repo` | The path resolves outside the root, so the collector did not read it. |
+| `line_out_of_range` | The file has no such line, or `line` is missing or not an integer. |
+| `not_checked` | The evidence kind is not `file`, or the cited file is over 8 MB. |
+
+The excerpt shows each line as `   41 | text`, and the cited line as
+`>> 42 | text`. The numbers are aligned to one width.
+
+`in_diff` is true when the cited line is within 5 lines of a change in
+`git diff HEAD`. Line numbers count in the current file. A deletion counts at its place in
+the current file, and an untracked file counts as changed. It is null when git
+cannot answer or the status is not `ok`. It is context, not a verdict.
+
+The script never rejects a claim. It only finds citations that cannot be checked.
+You judge the rest under the citation rule. A citation supports the claim only
+when the cited file exists and the cited line is within 5 lines of the code that
+supports the claim. Line numbers count in the current file. A `file_missing`,
+`outside_repo`, or `line_out_of_range` finding is unsupported. For `ok`, compare
+the claim with the excerpt, and open the file before you reject it. Treat
+`command` and `output` evidence as reported, and re-run it only for a blocking
+finding. An unsupported non-blocking finding gets one line in the merged view.
+`commands/4p.md` carries the full procedure.
+
+The evidence-check eval (`experiments/evidence-eval/`, results in
+`docs/ROADMAP.md`) chose this split. Told this rule, a strong model checks
+citations at 0.98 accuracy. The coordinator already is that model.
 
 ## Rapid checkpoint (AMO / contraire)
 
@@ -169,6 +232,10 @@ herdr agent read <name> --source recent-unwrapped --lines 2000 \
 herdr agent list
 ```
 
+A pi pane shows only its visible lines to `herdr agent read`. Read its saved
+report at `/tmp/4pp/<tab>/<role>.json` instead, after its self-check prints
+"valid".
+
 Give each pane the task it is built for. Hand the decision to the AMO and big
 picture seats, the change to reviewer, the runtime behavior to tester. Send one
 task to all four only when a full cross-check justifies the cost.
@@ -181,14 +248,18 @@ or `herdr agent list`. Never assume them.
 
 Present one merged view, not four summaries:
 
-1. **Agreements first.** Where all panes converge, state that plainly.
-2. **Blocking findings.** Any finding where `blocks` is true is a real risk:
+1. **Check each finding's evidence first.** Act only on findings that pass the
+   citation rule. Mark each finding you act on as checked. Report a blocking
+   finding you judge unsupported as "unsupported", with the reason. Give each
+   unsupported non-blocking finding one line. Never drop a finding silently.
+2. **Agreements.** Where all panes converge, state that plainly.
+3. **Blocking findings.** Any finding where `blocks` is true is a real risk:
    data loss, security, a broken deploy, an irreversible choice, or a silent
    behavior change. These gate the merge.
-3. **Strongest objection per seat.** One per role, ranked by severity.
-4. **Questions for the owner.** Anything in `questions[]` belongs to the user.
+4. **Strongest objection per seat.** One per role, ranked by severity.
+5. **Questions for the owner.** Anything in `questions[]` belongs to the user.
    Present each with a recommendation. Never present a decision bare.
-5. **Your disposition.** After incorporating the panel's findings, state whether
+6. **Your disposition.** After incorporating the panel's findings, state whether
    you would ship, fix first, or hold.
 
 Use the fields that carry the decision: `verdict`, `confidence`,
@@ -230,7 +301,7 @@ Useful fields when you merge:
 | `verdict` | `ship`, `fix_first`, `block`, `hold`, or `could_not_verify` |
 | `confidence` | The pane's own certainty. Low is useful information, not noise. |
 | `findings[].blocks` | True only for real risk. This is what gates a merge. |
-| `findings[].evidence` | `kind=file` needs `file` and `line`. A citation without a line is not checkable, and the validator rejects it. |
+| `findings[].evidence` | `kind=file` needs `file` and `line`. A citation without a line is not checkable, and the validator rejects it. `file` is repo-relative. `--collect` checks each file citation in `evidence_checks`. |
 | `assumptions[]` | Every assumption the verdict rests on, each with `if_false`. An unstated assumption is the most expensive kind. |
 | `questions[]` | Decisions that belong to the owner, each with a `recommendation`. Never presented bare. |
 | `could_not_verify[]` | What the pane could not run, and the precise blocker. |
@@ -286,6 +357,10 @@ reads follows house rules:
 - Do not quote pane json verbatim. Rewrite it in Simplified Technical English.
 
 ## Environment
+
+These names start with a digit, so a shell cannot assign them directly:
+`4PP_KIND=claude cmd` fails with "command not found". Set them with `env`, for
+example `env 4PP_KIND=claude 4PP_STRICT_NO_WRITE=1 python3 panel/4p.py`.
 
 | Variable | Effect |
 | --- | --- |

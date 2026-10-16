@@ -70,14 +70,19 @@ Not published to npm yet.
 /4p:4p                same, with the arguments after the command name
 ```
 
-Pane kind defaults to the host: `pi` from the pi extension, `claude` from the
-Claude Code command. Override either with `4PP_KIND`. Any kind Herdr supports
+Panes run `pi` by default, from both hosts. Override that with `4PP_KIND`, set
+through `env`. Any kind Herdr supports
 works, so a Claude Code session can run a panel of pi panes, or the reverse.
 
 The launcher is idempotent. Panes carry a `4pp:<role>` label and the panel is
 recorded in `/tmp/4pp/<tab>/panel.json`, so re-running reuses the live panel,
 repairs a drifted label, and fills in only what is missing. Your pi session is
 the coordinator: it waits for the panes, reads them, and merges the result.
+
+After you upgrade to 0.5.0, run `/4p --rebrief <task>` once on a live panel.
+The 0.5.0 brief tells each pane to save its report to a file, and the coordinator
+reads that file. A pane briefed before 0.5.0 does not save it. A pi pane shows
+only its visible lines, so the coordinator cannot read its report from the pane.
 
 Afterwards, from the same session:
 
@@ -105,7 +110,7 @@ An unrecognized kind gets no flags. Its posture is the brief and nothing more,
 which is weaker than it looks. Check the table before you trust a new kind.
 
 That is a contract, not a sandbox: panes keep `bash` because they need it to run
-tests. For the enforced version, set `4PP_STRICT_NO_WRITE=1` and they get
+tests. For the enforced version, set `env 4PP_STRICT_NO_WRITE=1` and they get
 `read,grep,find,ls` only, at the cost of not being able to run anything.
 
 ## The contract
@@ -195,6 +200,10 @@ word that flips a meaning costs more than that.
 
 See [experiments/lang/README.md](experiments/lang/README.md) for the method and
 the caveman comparison.
+
+These names start with a digit, so a shell cannot assign them directly:
+`4PP_KIND=claude cmd` fails with "command not found". Set them with `env`, for
+example `env 4PP_KIND=claude 4PP_STRICT_NO_WRITE=1 python3 panel/4p.py`.
 
 | Variable | Effect |
 | --- | --- |
